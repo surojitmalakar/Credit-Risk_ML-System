@@ -1,4 +1,4 @@
-"""Seven-page Streamlit research dashboard for MSME financial distress."""
+"""Eight-page Streamlit research dashboard for MSME financial distress."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "src"))
 import joblib
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from msme_ews.data import validate_financial_data
@@ -38,7 +39,7 @@ h1, h2, h3 { color:var(--ink); letter-spacing:0; }
 """, unsafe_allow_html=True)
 
 PAGES = ["Executive Overview", "MSME Financial Health", "Risk Prediction", "Explainable AI",
-         "Early-Warning Indicators", "Model Performance", "Methodology"]
+         "Early-Warning Indicators", "Model Performance", "Methodology", "About"]
 
 
 @st.cache_resource
@@ -130,6 +131,36 @@ elif page == "MSME Financial Health":
 elif page == "Risk Prediction":
     page_header("Risk Prediction", "Estimated probability, category, and the factors behind this model score.")
     result = show_risk()
+    health_score = (1 - result["distress_probability"]) * 100
+    gauge = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=health_score,
+        number={"suffix": "%", "font": {"color": "#19342d", "size": 42}},
+        title={"text": "Estimated financial health", "font": {"color": "#19342d", "size": 18}},
+        gauge={
+            "axis": {"range": [0, 100], "ticksuffix": "%"},
+            "bar": {"color": "#448568", "thickness": 0.25},
+            "bgcolor": "rgba(255,255,255,.55)",
+            "borderwidth": 0,
+            "steps": [
+                {"range": [0, 40], "color": "#f1d4c9"},
+                {"range": [40, 70], "color": "#f4e6bd"},
+                {"range": [70, 100], "color": "#d9efe4"},
+            ],
+            "threshold": {
+                "line": {"color": "#19342d", "width": 3},
+                "thickness": 0.8,
+                "value": health_score,
+            },
+        },
+    ))
+    gauge.update_layout(
+        height=260,
+        margin={"t": 55, "b": 20, "l": 35, "r": 35},
+        paper_bgcolor="rgba(0,0,0,0)",
+    )
+    st.plotly_chart(gauge, use_container_width=True)
+    st.caption("Health score is calculated as 100% minus the model's estimated distress probability; it is not a separate diagnosis.")
     risk, protective = st.columns(2)
     with risk:
         st.subheader("Risk-increasing factors")
@@ -192,7 +223,7 @@ elif page == "Model Performance":
         st.caption("No held-out protected-group diagnostics are stored in this model bundle.")
     disclaimer()
 
-else:
+elif page == "Methodology":
     page_header("Methodology & Research Mode", "Definitions, evaluation choices, limitations, and responsible interpretation.")
     st.subheader("Dataset")
     st.write("The included company-period dataset is synthetic, generated with a fixed seed, and labeled by a noisy illustrative rule. It is not external evidence or real default data.")
@@ -207,3 +238,75 @@ else:
     st.subheader("Feature definitions")
     st.dataframe(pd.DataFrame({"Feature": features.columns, "Definition": ["Raw numeric statement field" if name in frame.columns else "Engineered ratio; see project README" for name in features.columns]}), use_container_width=True, hide_index=True)
     disclaimer()
+
+elif page == "About":
+    page_header("About Surojit Malakar", "Finance, research, operations, and technology in service of practical impact.")
+    photo_column, intro_column = st.columns([1, 2], gap="large")
+    with photo_column:
+        st.image(
+            "https://github.com/surojitmalakar.png?size=440",
+            caption="Surojit Malakar",
+            width=220,
+        )
+    with intro_column:
+        st.subheader("A little about me")
+        st.write(
+            "I am a BBA (Honours with Research) student at Techno India University, "
+            "Kolkata, specializing in Finance, Business Analytics, and Operations. "
+            "My interests lie at the intersection of financial analysis, business "
+            "strategy, operations, research, and social entrepreneurship."
+        )
+        st.write(
+            "My long-term goal is to build a career where I can combine financial "
+            "and analytical thinking with research, strategic decision-making, and "
+            "practical business execution, while continuing to develop initiatives "
+            "that create measurable economic and social impact."
+        )
+
+    st.subheader("Entrepreneurship & community impact")
+    st.write(
+        "I am the Founder of SkillseED India, a rural social enterprise focused on "
+        "skill development, agribusiness education, and farmer empowerment. Through "
+        "SkillseED India, I have worked with students and farmers across West Bengal "
+        "and developed initiatives focused on practical education, skill "
+        "development, and agricultural business opportunities."
+    )
+    st.write(
+        "I am also the Founder and Developer of ZynoqIndia, where I have worked on "
+        "an eco-tourism and open-access research publishing platform. This experience "
+        "has allowed me to combine business strategy with technology, including "
+        "product development, UI/UX, React, Vite, Supabase, and digital publishing systems."
+    )
+
+    st.subheader("Research & analytical frameworks")
+    st.write(
+        "My research work focuses on solving practical business and economic problems "
+        "through structured analytical frameworks. I developed the Farm-to-Consumer "
+        "(F2C 4.0) Model, which focuses on farmer entrepreneurship education, "
+        "institutional market access, and cooperative business development."
+    )
+    st.write(
+        "I have also developed Decision Paralysis Economics (DPE), an analytical "
+        "framework examining the organizational and economic costs associated with "
+        "delayed decision-making in environments affected by information overload "
+        "and AI-mediated ambiguity."
+    )
+    st.write(
+        "My academic research experience includes primary data collection, survey "
+        "research, statistical analysis, SPSS-based reporting, and the development "
+        "of analytical frameworks."
+    )
+
+    st.subheader("Experience & interests")
+    st.write(
+        "Alongside my research and entrepreneurial work, I have gained experience "
+        "in HR operations, project management, financial analysis, business "
+        "operations, and community development. My professional experience has "
+        "allowed me to work on recruitment, process improvement, cross-functional "
+        "coordination, research, and program management."
+    )
+    st.write(
+        "I am particularly interested in finance, business analytics, operations "
+        "strategy, agribusiness, financial decision-making, research, and "
+        "technology-enabled business models."
+    )
