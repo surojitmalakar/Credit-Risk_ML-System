@@ -22,19 +22,110 @@ from msme_ews.features import engineer_features
 from msme_ews.modeling import train_models
 from msme_ews.prediction import DEFAULT_MODEL_PATH, predict_financial_health
 
-st.set_page_config(page_title="MSME Financial Early Warning", page_icon="◈", layout="wide")
+st.set_page_config(
+    page_title="MSME Financial Early Warning",
+    page_icon="◈",
+    layout="wide",
+    initial_sidebar_state="auto",
+)
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap');
-:root { --ink:#19342d; --muted:#60736d; --mint:#d9efe4; --coral:#d97757; --paper:#f5f7f3; }
-html, body, [class*="css"] { font-family: 'Manrope', sans-serif; color:var(--ink); }
+:root {
+    color-scheme: light;
+    --ink:#19342d;
+    --muted:#4e625a;
+    --mint:#d9efe4;
+    --coral:#d97757;
+    --paper:#f5f7f3;
+}
+html, body, [class*="css"] { font-family:'Manrope',sans-serif; color:var(--ink); }
+html, body { max-width:100%; overflow-x:hidden; }
 .stApp { background: radial-gradient(ellipse at 90% 0%, #e9f2e8 0, transparent 36%), var(--paper); }
-h1, h2, h3 { color:var(--ink); letter-spacing:0; }
-[data-testid="stMetric"] { background:rgba(255,255,255,.72); border:1px solid #dfe8df; padding:14px 16px; border-radius:6px; }
+h1, h2, h3, h4, h5, h6 { color:var(--ink) !important; letter-spacing:0; }
+p, li, label, legend, small, [data-testid="stCaptionContainer"],
+[data-testid="stWidgetLabel"], [data-testid="stMarkdownContainer"],
+[data-testid="stMetricLabel"], [data-testid="stMetricValue"],
+[data-testid="stMetricDelta"], [data-testid="stMarkdownContainer"] *,
+[data-testid="stWidgetLabel"] *, [data-testid="stSidebar"] * {
+    color:var(--ink) !important;
+}
+[data-testid="stMetric"] {
+    min-width:0;
+    background:rgba(255,255,255,.82);
+    border:1px solid #dfe8df;
+    padding:14px 16px;
+    border-radius:6px;
+}
 [data-testid="stSidebar"] { background:#edf3ec; border-right:1px solid #dbe5dc; }
-[data-testid="stDataFrame"] { border:1px solid #dfe8df; border-radius:6px; }
-.eyebrow { font:500 11px 'DM Mono',monospace; color:#61776e; text-transform:uppercase; }
+[data-testid="stDataFrame"] {
+    max-width:100%;
+    border:1px solid #dfe8df;
+    border-radius:6px;
+}
+.eyebrow { font:500 11px 'DM Mono',monospace; color:#4e625a; text-transform:uppercase; }
 .risk-note { border-left:3px solid #d97757; padding:10px 14px; background:#fff8f4; color:#573b31; }
+.stApp button, .stApp [role="button"] {
+    color:var(--ink) !important;
+    background-color:#e5efe8;
+    border-color:#cbd9ce;
+}
+.stApp input, .stApp textarea, .stApp [data-baseweb="select"] * {
+    color:var(--ink) !important;
+}
+.stApp [data-testid="stImage"] img {
+    max-width:100%;
+    height:auto;
+    object-fit:contain;
+}
+@media (max-width: 767px) {
+    html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+        width:100%;
+        max-width:100%;
+        min-width:0;
+        overflow-x:hidden;
+    }
+    [data-testid="stMainBlockContainer"] {
+        width:100%;
+        max-width:100%;
+        min-width:0;
+        padding:1rem clamp(.75rem, 4vw, 1rem) 2rem;
+    }
+    [data-testid="stHorizontalBlock"] {
+        flex-wrap:wrap;
+        gap:.75rem;
+        min-width:0;
+    }
+    [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+        flex:1 1 100% !important;
+        width:100% !important;
+        min-width:0 !important;
+    }
+    [data-testid="stSidebar"][aria-expanded="true"] {
+        width:min(88vw, 20rem) !important;
+        min-width:min(88vw, 20rem) !important;
+        max-width:88vw !important;
+    }
+    [data-testid="stMetric"] {
+        width:100%;
+        padding:12px;
+    }
+    [data-testid="stDataFrame"], [data-testid="stTable"] {
+        max-width:100%;
+        overflow-x:auto;
+    }
+    [data-testid="stPlotlyChart"], [data-testid="stImage"] {
+        max-width:100%;
+        min-width:0;
+    }
+    [data-testid="stImage"] img {
+        width:auto;
+        max-width:min(100%, 220px);
+    }
+    h1 { font-size:clamp(1.7rem, 7vw, 2.25rem); }
+    h2 { font-size:clamp(1.35rem, 5.5vw, 1.75rem); }
+    h3 { font-size:clamp(1.15rem, 4.5vw, 1.4rem); }
+}
 </style>
 """, unsafe_allow_html=True)
 
