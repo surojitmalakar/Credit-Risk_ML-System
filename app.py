@@ -46,7 +46,18 @@ from msme_ews.financial_analysis import (
     rule_based_assessment,
 )
 from msme_ews.features import engineer_features
-from msme_ews.modeling import calibration_sample, train_models
+from msme_ews.modeling import train_models
+
+# Streamlit Cloud can serve a partially refreshed revision, so a helper that moves
+# between modules must never take the whole dashboard down. Calibration diagnostics
+# degrade to an "unavailable" state instead of raising ImportError on startup.
+try:
+    from msme_ews.modeling import calibration_sample
+except ImportError:  # pragma: no cover - depends on the deployed module revision
+    try:
+        from msme_ews.calibration import calibration_sample
+    except ImportError:
+        calibration_sample = None
 from msme_ews.monitoring import (
     build_snapshot,
     drift_report,
@@ -285,6 +296,16 @@ def _cached_tornado(dataset_key: str, row_index: int, bundle_signature: str) -> 
 @st.cache_data(show_spinner=False, max_entries=8)
 def _cached_calibration(dataset_key: str, frame_hash: str, bundle_signature: str) -> dict:
     frame, _, _ = _dataset_parts(dataset_key)
+    if calibration_sample is None:  # an older deployed revision lacks the helper
+        table = calibration_table([], [])
+        return {
+            "probabilities": [],
+            "labels": [],
+            "basis": "calibration diagnostics are unavailable in this deployment",
+            "is_in_sample": False,
+            "table": table,
+            "metrics": reliability_metrics([], [], table),
+        }
     sample = calibration_sample(get_bundle(), frame)
     table = calibration_table(sample["probabilities"], sample["labels"])
     return {
