@@ -272,6 +272,7 @@ def _cached_search_blob(dataset_key: str, source: str = "dataset") -> pd.Series:
     return search_blob(frame)
 
 
+@st.cache_data(show_spinner=False, max_entries=16)
 def _cached_stress_grid(
     dataset_key: str,
     row_index: int,
