@@ -8,14 +8,62 @@ import numpy as np
 import pandas as pd
 
 from msme_ews.data import FINANCIAL_COLUMNS
-from msme_ews.financial_analysis import (
-    analyze_financials,
-    has_sufficient_ml_data,
-    model_eligible_rows,
-    observed_field_counts,
-    rule_based_assessment,
-    rule_based_risk_index,
-)
+try:
+    from msme_ews.financial_analysis import (
+        analyze_financials,
+        has_sufficient_ml_data,
+        model_eligible_rows,
+        observed_field_counts,
+        rule_based_assessment,
+        rule_based_risk_index,
+    )
+except ImportError:
+    from msme_ews.financial_analysis import (
+        analyze_financials,
+        has_sufficient_ml_data,
+        rule_based_assessment,
+    )
+
+    # Streamlit can briefly serve mixed file revisions while refreshing a
+    # deployment. Keep screening usable with the scalar API from older versions.
+    def observed_field_counts(frame: pd.DataFrame) -> pd.Series:
+        available = [column for column in FINANCIAL_COLUMNS if column != "Sales_Growth"]
+        values = pd.DataFrame(index=frame.index)
+        for column in available:
+            source = frame[column] if column in frame else pd.Series(np.nan, index=frame.index)
+            values[column] = pd.to_numeric(source, errors="coerce").replace(
+                [np.inf, -np.inf], np.nan
+            ).notna()
+        return values.sum(axis=1).astype("int64")
+
+    def model_eligible_rows(frame: pd.DataFrame) -> pd.Series:
+        return pd.Series(
+            [has_sufficient_ml_data(frame, position) for position in range(len(frame))],
+            index=frame.index,
+            dtype=bool,
+        )
+
+    def rule_based_risk_index(
+        frame: pd.DataFrame,
+        features: pd.DataFrame,
+    ) -> pd.DataFrame:
+        rows = []
+        coverage = observed_field_counts(frame)
+        for position in range(len(frame)):
+            analysis = analyze_financials(frame, position, features)
+            assessment = rule_based_assessment(frame, position, analysis)
+            factors = assessment["top_risk_factors"]
+            probability = assessment["distress_probability"]
+            rows.append({
+                "Rule risk index": probability,
+                "Rule risk category": assessment["risk_category"],
+                "Rule risk score": sum(factor["contribution"] for factor in factors),
+                "Rule risk factors": len(factors),
+                "Rule drivers": ", ".join(factor["feature"] for factor in factors),
+                "Rule protective factors": len(assessment["protective_factors"]),
+                "Observed core fields": coverage.iloc[position],
+            })
+        return pd.DataFrame(rows, index=frame.index)
 from msme_ews.prediction import risk_category
 
 ML_METHOD = "Existing ML model"

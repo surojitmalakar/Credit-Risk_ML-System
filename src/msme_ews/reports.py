@@ -398,3 +398,162 @@ def create_data_intelligence_excel(analysis: dict[str, Any]) -> bytes:
                 for cell in column_cells[1:]:
                     cell.alignment = Alignment(vertical="top", wrap_text=True)
     return output.getvalue()
+
+
+_BAND_COLOURS = {
+    "Low Risk": colors.HexColor("#10B981"),
+    "Moderate Risk": colors.HexColor("#F59E0B"),
+    "High Risk": colors.HexColor("#F97316"),
+    "Critical Risk": colors.HexColor("#EF4444"),
+    "Insufficient Data": colors.HexColor("#94A3B8"),
+}
+
+
+def _style_table(table: Table, widths: list[float] | None = None) -> Table:
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0F172A")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#CBD5F5")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F1F5F9")]),
+    ]))
+    if widths:
+        table._argW = widths
+    return table
+
+
+def create_screening_pdf(
+    scores: pd.DataFrame,
+    summary: dict[str, Any],
+    filename: str,
+    exposure: pd.DataFrame | None = None,
+    max_rows: int = 120,
+) -> bytes:
+    """Create a portfolio screening report with band mix and ranked records."""
+    buffer = BytesIO()
+    document = SimpleDocTemplate(
+        buffer, pagesize=letter,
+        title="Portfolio screening report", author="MSME Credit Risk Research Dashboard",
+    )
+    styles = getSampleStyleSheet()
+    story: list[Any] = [
+        Paragraph("Portfolio Screening Report", styles["Title"]),
+        Paragraph(escape(f"Source: {filename}"), styles["Normal"]),
+        Spacer(1, 0.18 * inch),
+        Paragraph(
+            "Screening scores are research estimates produced by an existing statistical model "
+            "or, for records with too few observed fields, a transparent rule-based index. "
+            "They are not lending decisions and carry no calibration guarantee.",
+            styles["Normal"],
+        ),
+        Spacer(1, 0.2 * inch),
+    ]
+    summary_rows = [["Records screened", f"{summary.get('records', 0):,}"]]
+    summary_rows.extend(
+        [band, f"{count:,}"] for band, count in (summary.get("bands") or {}).items()
+    )
+    summary_rows.extend([
+        ["ML model scored", f"{summary.get('model_records', 0):,}"],
+        ["Rule-based index", f"{summary.get('rule_records', 0):,}"],
+        ["Records with warning signals", f"{summary.get('flagged_records', 0):,}"],
+        ["Mean risk estimate", _display(summary.get("mean_probability"))],
+    ])
+    story.append(Paragraph("Screening summary", styles["Heading2"]))
+    summary_cells = [
+        [Paragraph(str(cell), styles["BodyText"]) for cell in row]
+        for row in summary_rows
+    ]
+    story.append(_style_table(Table(summary_cells, colWidths=[4.2 * inch, 1.6 * inch])))
+    story.append(Spacer(1, 0.22 * inch))
+
+    if exposure is not None and not exposure.empty:
+        story.append(Paragraph("Exposure by risk band", styles["Heading2"]))
+        exposure_rows = [[str(column) for column in exposure.columns]]
+        exposure_rows.extend([[_display(cell) for cell in row] for row in exposure.itertuples(index=False)])
+        story.append(_style_table(Table(exposure_rows, repeatRows=1)))
+        story.append(Spacer(1, 0.22 * inch))
+
+    ordered = scores.sort_values("Distress probability", ascending=False)
+    story.append(Paragraph(
+        f"Highest estimated risk records (up to {max_rows} of {len(ordered):,})", styles["Heading2"],
+    ))
+    listed = [
+        "Record", "Company", "Period", "Risk category", "Distress probability",
+        "Health score", "Method", "Warning signals",
+    ]
+    rows = [listed]
+    for record in ordered.head(max_rows).itertuples(index=False):
+        probability = record._asdict().get("Distress probability")
+        rows.append([
+            _display(record._asdict().get("Record")),
+            _display(record._asdict().get("Company", "Not identified")),
+            _display(record._asdict().get("Period", "Not identified")),
+            str(record._asdict().get("Risk category")),
+            "Not available" if pd.isna(probability) else f"{float(probability):.1%}",
+            _display(record._asdict().get("Health score")),
+            str(record._asdict().get("Method")),
+            _display(record._asdict().get("Warning signals")),
+        ])
+    widths = [0.45 * inch, 1.35 * inch, 0.95 * inch, 0.95 * inch, 0.8 * inch, 0.6 * inch, 1.15 * inch, 0.6 * inch]
+    table = Table(rows, repeatRows=1)
+    _style_table(table, widths)
+    for index, record in enumerate(ordered.head(max_rows).itertuples(index=False), start=1):
+        band = str(record._asdict().get("Risk category"))
+        table.setStyle(TableStyle([("TEXTCOLOR", (3, index), (3, index), _BAND_COLOURS.get(band, colors.black))]))
+    story.append(table)
+    story.append(Spacer(1, 0.2 * inch))
+    story.append(Paragraph(
+        "Records shown are sorted by the model's own estimate. Review underlying statements, "
+        "data coverage, and early-warning signals before drawing any conclusion.",
+        styles["Italic"],
+    ))
+    document.build(story)
+    return buffer.getvalue()
+
+
+def create_screening_excel(
+    scores: pd.DataFrame,
+    summary: dict[str, Any],
+    exposure: pd.DataFrame | None = None,
+    notes: pd.DataFrame | None = None,
+    max_rows: int = 50_000,
+) -> bytes:
+    """Create a screening workbook with summary, bands, exposure, and records."""
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        pd.DataFrame([
+            {"Metric": "Records screened", "Value": summary.get("records", 0)},
+            {"Metric": "ML model scored", "Value": summary.get("model_records", 0)},
+            {"Metric": "Rule-based index", "Value": summary.get("rule_records", 0)},
+            {"Metric": "Insufficient data", "Value": summary.get("insufficient_records", 0)},
+            {"Metric": "Records with warning signals", "Value": summary.get("flagged_records", 0)},
+            {"Metric": "Mean risk estimate", "Value": summary.get("mean_probability")},
+            {"Metric": "Median risk estimate", "Value": summary.get("median_probability")},
+            {"Metric": "Elevated records (>=60%)", "Value": summary.get("elevated_records", 0)},
+            {"Metric": "Interpretation", "Value": (
+                "Screening scores are research estimates, not lending decisions. Records scored by "
+                "the rule-based index are heuristics rather than calibrated probabilities."
+            )},
+        ]).to_excel(writer, sheet_name="Overview", index=False)
+        pd.DataFrame([
+            {"Risk category": band, "Records": count}
+            for band, count in (summary.get("bands") or {}).items()
+        ]).to_excel(writer, sheet_name="Band Summary", index=False)
+        if exposure is not None and not exposure.empty:
+            exposure.to_excel(writer, sheet_name="Exposure", index=False)
+        if notes is not None and not notes.empty:
+            notes.to_excel(writer, sheet_name="Analyst Notes", index=False)
+        ordered = scores.sort_values("Distress probability", ascending=False)
+        ordered.head(max_rows).to_excel(writer, sheet_name="Screening", index=False)
+        for sheet in writer.book.worksheets:
+            for column_cells in sheet.columns:
+                letter = get_column_letter(column_cells[0].column)
+                width = max((len(str(cell.value)) for cell in column_cells if cell.value is not None), default=10)
+                sheet.column_dimensions[letter].width = min(max(width + 2, 10), 60)
+            sheet.freeze_panes = "A2"
+            for cell in sheet[1]:
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.fill = PatternFill("solid", fgColor="0F172A")
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+    return output.getvalue()

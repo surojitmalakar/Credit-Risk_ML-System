@@ -18,6 +18,15 @@ import streamlit as st
 from html import escape
 
 from msme_ews.data import FINANCIAL_COLUMNS, validate_financial_data
+from msme_ews.calibration import (
+    DEFAULT_CUTOFFS,
+    band_distribution,
+    calibration_table,
+    cutoff_summary,
+    reliability_metrics,
+    shifted_band_counts,
+    threshold_table,
+)
 from msme_ews.credit_assessment import apply_scenario_adjustments, generate_risk_interpretation
 from msme_ews.copilot import (
     build_credit_context,
@@ -37,13 +46,26 @@ from msme_ews.financial_analysis import (
     rule_based_assessment,
 )
 from msme_ews.features import engineer_features
-from msme_ews.modeling import train_models
+from msme_ews.modeling import calibration_sample, train_models
 from msme_ews.monitoring import (
     build_snapshot,
     drift_report,
     monitoring_alerts,
     prediction_stability,
     snapshot_table,
+)
+from msme_ews.notes import (
+    NOTE_DECISIONS,
+    add_note,
+    audit_csv,
+    audit_event,
+    audit_frame,
+    decision_counts,
+    log_event,
+    make_note,
+    notes_csv,
+    notes_frame,
+    validate_note,
 )
 from msme_ews.portfolio import analyze_credit_portfolio
 from msme_ews.prediction import DEFAULT_MODEL_PATH, predict_financial_health
@@ -52,6 +74,19 @@ from msme_ews.reports import (
     create_data_intelligence_excel,
     create_data_intelligence_pdf,
     create_excel_analysis,
+    create_screening_excel,
+    create_screening_pdf,
+)
+from msme_ews.scenarios import (
+    MAX_GRID_SCENARIOS,
+    STRESS_FACTORS,
+    STRESS_PRESETS,
+    available_factors,
+    breakeven_step,
+    grid_size,
+    run_stress_grid,
+    summarize_stress,
+    tornado_rows,
 )
 from msme_ews.screening import (
     banded_exposure,
@@ -90,6 +125,7 @@ def _validate_upload_cache_key(
 _HASH_CHUNK_BYTES = 1 << 20
 _DATASET_REGISTRY_LIMIT = 3
 _DATASET_REGISTRY: dict[str, tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]] = {}
+_DATASET_LABELS: dict[str, str] = {}
 
 
 def _register_dataset(
@@ -97,6 +133,7 @@ def _register_dataset(
     frame: pd.DataFrame,
     features: pd.DataFrame,
     flags: pd.DataFrame,
+    label: str = "",
 ) -> None:
     """Hold a dataset in memory so cached work can key on a short string.
 
@@ -104,8 +141,12 @@ def _register_dataset(
     keying on this identifier keeps repeated interaction work O(1) in the dataset.
     """
     _DATASET_REGISTRY[dataset_key] = (frame, features, flags)
+    if label:
+        _DATASET_LABELS[dataset_key] = label
     while len(_DATASET_REGISTRY) > _DATASET_REGISTRY_LIMIT:
-        _DATASET_REGISTRY.pop(next(iter(_DATASET_REGISTRY)))
+        stale = next(iter(_DATASET_REGISTRY))
+        _DATASET_REGISTRY.pop(stale)
+        _DATASET_LABELS.pop(stale, None)
 
 
 def _dataset_parts(dataset_key: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -221,6 +262,75 @@ def _cached_search_blob(dataset_key: str, source: str = "dataset") -> pd.Series:
         return search_blob(_cached_screening_scores(dataset_key, _bundle_signature(get_bundle())))
     frame, _, _ = _dataset_parts(dataset_key)
     return search_blob(frame)
+
+
+def _cached_stress_grid(
+    dataset_key: str,
+    row_index: int,
+    factor_keys: tuple[str, ...],
+    bundle_signature: str,
+) -> pd.DataFrame:
+    frame, _, _ = _dataset_parts(dataset_key)
+    factors = [factor for factor in STRESS_FACTORS if factor.key in factor_keys]
+    return run_stress_grid(frame.iloc[[row_index]], factors, get_bundle())
+
+
+@st.cache_data(show_spinner=False, max_entries=16)
+def _cached_tornado(dataset_key: str, row_index: int, bundle_signature: str) -> pd.DataFrame:
+    frame, _, _ = _dataset_parts(dataset_key)
+    factors = available_factors(frame.iloc[row_index])
+    return tornado_rows(frame.iloc[[row_index]], factors, get_bundle())
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _cached_calibration(dataset_key: str, frame_hash: str, bundle_signature: str) -> dict:
+    frame, _, _ = _dataset_parts(dataset_key)
+    sample = calibration_sample(get_bundle(), frame)
+    table = calibration_table(sample["probabilities"], sample["labels"])
+    return {
+        **sample,
+        "table": table,
+        "metrics": reliability_metrics(sample["probabilities"], sample["labels"], table),
+    }
+
+
+def _cached_screening_pdf(
+    dataset_key: str,
+    bundle_signature: str,
+    exposure_column: str,
+) -> bytes:
+    frame, _, _ = _dataset_parts(dataset_key)
+    scores = _cached_screening_scores(dataset_key, bundle_signature)
+    return create_screening_pdf(
+        scores,
+        screening_summary(scores),
+        _dataset_label(dataset_key),
+        banded_exposure(scores, frame, exposure_column) if exposure_column else None,
+    )
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _cached_screening_workbook(
+    dataset_key: str,
+    bundle_signature: str,
+    exposure_column: str,
+    notes_signature: str,
+) -> bytes:
+    frame, _, _ = _dataset_parts(dataset_key)
+    scores = _cached_screening_scores(dataset_key, bundle_signature)
+    notes = notes_frame(st.session_state.get("underwriter_notes", []))
+    return create_screening_excel(
+        scores,
+        screening_summary(scores),
+        banded_exposure(scores, frame, exposure_column) if exposure_column else None,
+        notes if not notes.empty else None,
+    )
+
+
+def _dataset_label(dataset_key: str) -> str:
+    """Human-readable name for a dataset cache key."""
+    labels = _DATASET_LABELS
+    return labels.get(dataset_key, "Current dataset")
 
 
 def _bundle_signature(bundle: dict) -> str:
@@ -1673,6 +1783,37 @@ def render_screening_page(frame: pd.DataFrame, features: pd.DataFrame, flags: pd
                 "current dataset only and are not a portfolio forecast."
             )
 
+    export_cols = st.columns(3)
+    with export_cols[0]:
+        st.download_button(
+            "Download screening workbook (Excel)",
+            data=_cached_screening_workbook(
+                dataset_key,
+                _bundle_signature(bundle),
+                exposure_column or "",
+                str(len(st.session_state.get("underwriter_notes", []))),
+            ),
+            file_name="portfolio_screening.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="screening_workbook",
+            width="stretch",
+        )
+    with export_cols[1]:
+        st.download_button(
+            "Download screening report (PDF)",
+            data=_cached_screening_pdf(dataset_key, _bundle_signature(bundle), exposure_column or ""),
+            file_name="portfolio_screening.pdf",
+            mime="application/pdf",
+            key="screening_pdf",
+            width="stretch",
+            on_click="ignore",
+        )
+    with export_cols[2]:
+        st.caption(
+            "The workbook includes the screening table, band mix, exposure totals, and any analyst "
+            "notes saved in this session."
+        )
+
     filtered, visible = render_filtered_grid(scores, "screening", blob_source="screening")
     st.dataframe(visible, width="stretch", hide_index=True, key="screening_table")
     if filtered.empty:
@@ -1697,6 +1838,13 @@ def render_screening_page(frame: pd.DataFrame, features: pd.DataFrame, flags: pd
         st.caption(
             "This detail uses the same feature pass and model scoring as the table above, so the "
             "two views agree."
+        )
+        render_notes_panel(
+            snapshot["company"],
+            snapshot["period"],
+            snapshot["distress_probability"],
+            snapshot["risk_category"],
+            "screening",
         )
     st.caption(
         f"Screening ranks {len(filtered):,} of {summary['records']:,} records. "
@@ -1962,7 +2110,368 @@ def render_monitoring_page(bundle: dict) -> None:
         "Monitoring here observes the served model and the dataset it scores. It does not retrain, "
         "recalibrate, or certify the model; those steps need separate validation and governance."
     )
+    render_audit_panel()
     disclaimer()
+
+
+def render_stress_page(
+    frame: pd.DataFrame,
+    company_rows: list[int],
+    row_index: int,
+    bundle: dict,
+) -> None:
+    page_header(
+        "Stress Testing",
+        "Combine revenue, margin, leverage, interest, and liquidity shocks in a single "
+        "multi-factor grid, then isolate each lever to see what actually moves the estimate.",
+    )
+    factors = available_factors(frame.iloc[row_index])
+    if not factors:
+        st.warning(
+            "This record has too few observed fields to build a stress grid. Revenue and EBITDA "
+            "are required at minimum."
+        )
+        return
+
+    control_cols = st.columns([2, 3])
+    with control_cols[0]:
+        chosen = st.multiselect(
+            "Levers",
+            [factor.key for factor in factors],
+            default=[factor.key for factor in factors[:3]],
+            format_func=lambda key: next(f.label for f in factors if f.key == key),
+            key="stress_factors",
+            help="Each selected lever multiplies the size of the grid.",
+        )
+    selected_factors = [factor for factor in factors if factor.key in chosen]
+    with control_cols[1]:
+        combos = grid_size(selected_factors)
+        st.caption(
+            f"{combos:,} scenario combinations. "
+            + (
+                f"Grids above {MAX_GRID_SCENARIOS:,} combinations are blocked to keep the page responsive."
+                if combos > MAX_GRID_SCENARIOS
+                else "The whole grid is scored in one pass."
+            )
+        )
+    st.session_state["_stress_blocked"] = combos > MAX_GRID_SCENARIOS
+
+    preset_cols = st.columns(4)
+    for position, (name, changes) in enumerate(STRESS_PRESETS.items()):
+        with preset_cols[position]:
+            if st.button(name, key=f"stress_preset_{position}", width="stretch"):
+                st.session_state["stress_factors"] = [key for key in changes if key in {f.key for f in factors}]
+                st.rerun()
+
+    if st.session_state.get("_stress_blocked"):
+        st.error(
+            f"Select fewer levers. {combos:,} combinations exceeds the "
+            f"{MAX_GRID_SCENARIOS:,}-scenario limit for an interactive page."
+        )
+        return
+    if not selected_factors:
+        st.info("Select at least one lever to run a stress grid.")
+        return
+
+    with st.spinner("Scoring the stress grid..."):
+        results = _cached_stress_grid(
+            dataset_key,
+            row_index,
+            tuple(factor.key for factor in selected_factors),
+            _bundle_signature(bundle),
+        )
+    base_probability = float(results.attrs["base_probability"])
+    summary = summarize_stress(results, base_probability)
+
+    metric_cols = st.columns(5)
+    metric_cols[0].metric("Scenarios scored", f"{summary['scenarios']:,}")
+    metric_cols[1].metric("Reported estimate", f"{base_probability:.1%}")
+    metric_cols[2].metric(
+        "Worst case",
+        f"{summary['worst_probability']:.1%}",
+        summary["worst_band"],
+    )
+    metric_cols[3].metric("Best case", f"{summary['best_probability']:.1%}")
+    metric_cols[4].metric("Scenarios above 60%", f"{summary['elevated']:,}")
+    st.caption(
+        f"Worst case scenario: {summary['worst_scenario']}. "
+        f"{summary['worse_than_reported']:,} of {summary['scenarios']:,} combinations score above the "
+        "currently reported estimate."
+    )
+
+    st.markdown("<div class='panel-header'><h3>Scenario sensitivity (tornado)</h3></div>", unsafe_allow_html=True)
+    tornado = _cached_tornado(dataset_key, row_index, _bundle_signature(bundle))
+    if tornado.empty:
+        st.info("No single-lever sensitivity is available for this record.")
+    else:
+        downside_columns = [column for column in tornado.columns if column.startswith("Downside ")]
+        upside_columns = [column for column in tornado.columns if column.startswith("Upside ")]
+        plotted = tornado.copy()
+        plotted["Downside move"] = tornado["Downside impact"]
+        plotted["Upside move"] = tornado["Upside impact"]
+        figure = px.bar(
+            plotted.sort_values("Total impact"),
+            x=["Downside move", "Upside move"],
+            y="Factor",
+            orientation="h",
+            color_discrete_sequence=["#DC2626", "#16A34A"],
+            title="Change in risk estimate when each lever moves to its worst or best offered level",
+        )
+        figure.update_xaxes(title_text="Change in risk estimate")
+        figure.update_layout(barmode="group")
+        render_chart(figure, height=max(240, 90 + 46 * len(tornado)), margin={"t": 52, "r": 16, "b": 48, "l": 150})
+        st.dataframe(
+            tornado[["Factor", *downside_columns, *upside_columns, "Worst band", "Best band"]],
+            width="stretch",
+            hide_index=True,
+            key="stress_tornado",
+        )
+        flat = tornado[tornado["Total impact"] <= 1e-9]
+        if not flat.empty:
+            st.info(
+                "These levers show no measurable effect for this record: "
+                + ", ".join(str(name) for name in flat["Factor"])
+                + ". A tree-based model responds to combinations of features, so a single lever "
+                "can leave the estimate unchanged even when its ratio moves."
+            )
+
+    st.markdown("<div class='panel-header'><h3>Breakeven headroom</h3></div>", unsafe_allow_html=True)
+    headroom = pd.DataFrame([
+        {
+            "Lever": factor.label,
+            "Largest downside shock tested": factor.format_step(factor.steps[0]),
+            "Stays below 60% at": breakeven_step(
+                frame.iloc[[row_index]], factor, bundle, 0.60, "downside"
+            ),
+        }
+        for factor in selected_factors
+    ])
+    headroom["Stays below 60% at"] = headroom["Stays below 60% at"].map(
+        lambda value: "No offered level" if value is None else str(value)
+    )
+    st.dataframe(headroom, width="stretch", hide_index=True, key="stress_headroom")
+    st.caption(
+        "Headroom is the largest offered shock whose worst outcome still scores below 60%. "
+        "It is a screening signal, not a default trigger."
+    )
+
+    st.markdown("<div class='panel-header'><h3>All combinations</h3></div>", unsafe_allow_html=True)
+    ordered = results.sort_values("Distress probability", ascending=False)
+    st.dataframe(
+        ordered.head(500),
+        width="stretch",
+        hide_index=True,
+        key="stress_grid",
+    )
+    if len(ordered) > 500:
+        st.caption(f"Showing the 500 highest-risk of {len(ordered):,} scored combinations.")
+    st.download_button(
+        "Download full stress grid (CSV)",
+        data=results.to_csv(index=False).encode("utf-8"),
+        file_name="stress_grid.csv",
+        mime="text/csv",
+        key="stress_download",
+        width="stretch",
+    )
+    st.warning(
+        "Stress results are model responses, not forecasts. The response is only meaningful "
+        "inside the range of values seen in training, and a tree-based model can be non-monotonic: "
+        "a larger shock is not always the higher estimate."
+    )
+    disclaimer()
+
+
+def render_calibration_page(frame: pd.DataFrame, bundle: dict) -> None:
+    page_header(
+        "Model Calibration",
+        "Compare predicted risk with observed outcomes, then move the risk-band cutoffs to see "
+        "how the portfolio would be reclassified.",
+    )
+    sample = _cached_calibration(dataset_key, repr(len(frame)), _bundle_signature(bundle))
+    probabilities = sample["probabilities"]
+    labels = sample["labels"]
+    metrics = sample["metrics"]
+    if not probabilities:
+        st.info(
+            "No labeled outcomes are available for calibration. Upload a dataset with a binary "
+            "target column, or retrain the model so the held-out test split is recorded."
+        )
+        return
+    st.caption(f"Sample basis: {sample['basis']} · {metrics['records']:,} records.")
+
+    metric_cols = st.columns(6)
+    metric_cols[0].metric("Observed default rate", f"{metrics['observed_default_rate']:.1%}")
+    metric_cols[1].metric("Mean predicted risk", f"{metrics['predicted_default_rate']:.1%}")
+    metric_cols[2].metric("Brier score", f"{metrics['brier_score']:.4f}")
+    metric_cols[3].metric(
+        "Expected calibration error",
+        f"{metrics['expected_calibration_error']:.1%}"
+        if metrics["expected_calibration_error"] is not None else "Not available",
+    )
+    metric_cols[4].metric("ROC-AUC", f"{metrics['roc_auc']:.3f}" if metrics["roc_auc"] is not None else "Not available")
+    metric_cols[5].metric(
+        "Recalibration slope",
+        f"{metrics['calibration_slope']:.2f}"
+        if metrics["calibration_slope"] is not None else "Not available",
+    )
+    if sample["is_in_sample"]:
+        st.warning(
+            "These probabilities come from the same data the model was fitted on, so calibration "
+            "looks better than it will be out of sample. Retrain the model to record held-out "
+            "predictions."
+        )
+
+    st.markdown("<div class='panel-header'><h3>Reliability by predicted band</h3></div>", unsafe_allow_html=True)
+    table = sample["table"]
+    figure = px.line(
+        table,
+        x="Predicted default rate",
+        y="Observed default rate",
+        markers=True,
+        color_discrete_sequence=["#2563EB"],
+        title="Predicted versus observed default rate",
+    )
+    maximum = max(float(table["Predicted default rate"].max()), float(table["Observed default rate"].max()), 0.01)
+    figure.add_shape(type="line", x0=0, y0=0, x1=maximum, y1=maximum, line=dict(dash="dash", color="#94A3B8"))
+    figure.update_xaxes(title_text="Predicted default rate %", range=[0, maximum * 1.1])
+    figure.update_yaxes(title_text="Observed default rate %", range=[0, maximum * 1.1])
+    render_chart(figure, height=300)
+    st.dataframe(table, width="stretch", hide_index=True, key="calibration_table")
+    st.caption(
+        "A gap above zero means the model predicts more risk than was observed; a gap below zero "
+        "means it predicts less. Small bands are noisy, so read the shape of the curve before the "
+        "individual bands."
+    )
+
+    st.markdown("<div class='panel-header'><h3>Risk-band cutoffs</h3></div>", unsafe_allow_html=True)
+    cutoff_cols = st.columns(3)
+    tuned: list[float] = []
+    for position, (label, default) in enumerate(
+        zip(("Moderate", "High", "Critical"), DEFAULT_CUTOFFS, strict=True)
+    ):
+        with cutoff_cols[position]:
+            value = st.slider(
+                f"{label} at or above",
+                min_value=0.05,
+                max_value=0.95,
+                value=round(float(default), 2),
+                step=0.05,
+                key=f"cutoff_{position}",
+            )
+            tuned.append(value)
+    ordered = tuple(sorted(tuned))
+    st.caption(
+        f"Tuned cutoffs: {cutoff_summary(probabilities, ordered)}. "
+        f"Model defaults: {cutoff_summary(probabilities, DEFAULT_CUTOFFS)}."
+    )
+    if ordered[0] >= ordered[1] or ordered[1] >= ordered[2]:
+        st.error("Cutoffs must increase from Moderate to High to Critical.")
+        return
+    shifted = shifted_band_counts(probabilities, ordered)
+    band_figure = px.bar(
+        shifted.melt(id_vars="Risk category", value_vars=["Default records", "Tuned records"]),
+        x="Risk category",
+        y="value",
+        color="variable",
+        barmode="group",
+        color_discrete_sequence=["#94A3B8", "#2563EB"],
+        title="Records per band: default versus tuned cutoffs",
+    )
+    render_chart(band_figure, height=280)
+    st.dataframe(shifted, width="stretch", hide_index=True, key="cutoff_shift")
+    moved = shifted[shifted["Change"] != 0]
+    if not moved.empty:
+        st.warning(
+            "Cutoff changes reclassify "
+            + ", ".join(f"{row['Risk category']} ({row['Change']:+,})" for _, row in moved.iterrows())
+            + " records on this sample."
+        )
+    else:
+        st.info("The tuned cutoffs do not change any band on this sample.")
+
+    st.markdown("<div class='panel-header'><h3>Decision cutoffs</h3></div>", unsafe_allow_html=True)
+    st.dataframe(
+        threshold_table(probabilities, labels, (0.2, 0.3, 0.4, 0.5, 0.6, 0.7)),
+        width="stretch",
+        hide_index=True,
+        key="threshold_table",
+    )
+    st.caption(
+        "Precision at a cutoff is the share of flagged records that actually defaulted. "
+        "Precision (balanced) divides by the observed default rate, so 1.0 means no lift."
+    )
+    disclaimer()
+
+
+def render_notes_panel(company: str, period: str, probability: float | None, band: str, key: str) -> None:
+    """Save a review note for the selected record and list existing notes."""
+    st.markdown("<div class='panel-header'><h3>Analyst notes</h3></div>", unsafe_allow_html=True)
+    store = st.session_state.setdefault("underwriter_notes", [])
+    with st.form(f"note_form_{key}"):
+        text = st.text_area("Note", key=f"note_text_{key}", height=70, label_visibility="collapsed",
+                            placeholder="Record your review conclusion, conditions, or follow-ups...")
+        decision = st.selectbox("Decision", NOTE_DECISIONS, key=f"note_decision_{key}")
+        submitted = st.form_submit_button("Save note")
+    if submitted:
+        error = validate_note(text, decision)
+        if error:
+            st.error(error)
+        else:
+            record_key = f"{company}|{period}"
+            add_note(store, make_note(
+                record_key=record_key,
+                company=company,
+                period=period,
+                text=text,
+                decision=decision,
+                probability=probability,
+                risk_category=band,
+            ))
+            log_event(st.session_state.setdefault("audit_events", []), audit_event(
+                "Note saved",
+                f"{decision} recorded for {company} ({period}).",
+                _dataset_label(dataset_key),
+            ))
+            st.success("Note saved to this session.")
+
+    frame = notes_frame(store)
+    if not frame.empty:
+        st.caption(f"{len(frame)} note(s) saved in this session. Notes are session-scoped and are not persisted.")
+        st.dataframe(frame.head(50), width="stretch", hide_index=True, key=f"notes_table_{key}")
+        st.download_button(
+            "Download notes (CSV)",
+            data=notes_csv(store),
+            file_name="analyst_notes.csv",
+            mime="text/csv",
+            key=f"notes_download_{key}",
+        )
+        counts = decision_counts(store)
+        if not counts.empty:
+            st.caption("Decisions recorded: " + ", ".join(
+                f"{row['Decision']} {int(row['Notes'])}" for _, row in counts.iterrows()
+            ))
+
+
+def render_audit_panel() -> None:
+    st.markdown("<div class='panel-header'><h3>Audit trail</h3></div>", unsafe_allow_html=True)
+    events = st.session_state.setdefault("audit_events", [])
+    log_event(events, audit_event("View opened", "Reviewer opened the audit view.", _dataset_label(dataset_key)))
+    frame = audit_frame(events)
+    if frame.empty:
+        st.info("No recorded activity yet.")
+        return
+    st.caption(
+        f"{len(frame)} recorded action(s) in this session, newest first. "
+        "This trail is a working record, not a compliance-grade log."
+    )
+    st.dataframe(frame, width="stretch", hide_index=True, key="audit_table")
+    st.download_button(
+        "Download audit trail (CSV)",
+        data=audit_csv(events),
+        file_name="audit_trail.csv",
+        mime="text/csv",
+        key="audit_download",
+    )
 
 
 NAVIGATION = {
@@ -1977,8 +2486,10 @@ NAVIGATION = {
     "Explainable AI": "Explainable AI",
     "Early Warning": "Early-Warning Indicators",
     "Scenario Simulator": "Scenario Simulator",
+    "Stress Testing": "Stress Testing",
     "Credit Assessment": "Credit Assessment",
     "Model Performance": "Model Performance",
+    "Calibration": "Model Calibration",
     "Monitoring": "Model Monitoring",
     "Methodology": "Methodology",
     "About": "About",
@@ -2318,7 +2829,13 @@ if page == "Data Intelligence":
 bundle = get_bundle()
 features, flags = financial_base
 dataset_key = repr(upload_pipeline_key)
-_register_dataset(dataset_key, frame, features, flags)
+_register_dataset(
+    dataset_key,
+    frame,
+    features,
+    flags,
+    uploaded.name if uploaded is not None else "Synthetic demo data",
+)
 _monitor_label = (
     f"{uploaded.name} · revision {analysis_revision}" if uploaded is not None else "Synthetic demo data"
 )
@@ -2465,6 +2982,54 @@ if portfolio_analysis is not None and page == "Executive Overview":
         "and transparent credit-score thresholds; they are not model-generated default probabilities."
     )
     st.dataframe(portfolio_analysis["customers"], width="stretch", hide_index=True)
+
+    concentration = portfolio_analysis.get("concentration", {})
+    if concentration.get("available"):
+        st.markdown("<div class='panel-header'><h3>Exposure Concentration</h3></div>", unsafe_allow_html=True)
+        metrics = concentration["metrics"]
+        concentration_metrics = st.columns(4)
+        concentration_metrics[0].metric(
+            "Effective borrowers (1/HHI)",
+            f"{metrics['effective_borrowers']:.1f}"
+            if metrics["effective_borrowers"] is not None
+            else "Not available",
+        )
+        concentration_metrics[1].metric(
+            "Largest borrower share",
+            f"{metrics['largest_exposure_share']:.1%}"
+            if metrics["largest_exposure_share"] is not None
+            else "Not available",
+        )
+        concentration_metrics[2].metric(
+            "Top-10 exposure share",
+            f"{metrics['top_10_share']:.1%}"
+            if metrics["top_10_share"] is not None
+            else "Not available",
+        )
+        concentration_metrics[3].metric(
+            "Measured exposure",
+            f"{concentration['total_exposure']:,.2f}"
+            if concentration["total_exposure"] is not None
+            else "Not available",
+        )
+        st.caption(
+            f"Measured from the observed '{concentration['exposure_column']}' column by borrower. "
+            "The Herfindahl-Hirschman Index here is a descriptive concentration summary, "
+            "not a regulatory capital measure."
+        )
+        if not concentration["band_breakdown"].empty:
+            st.dataframe(concentration["band_breakdown"], width="stretch", hide_index=True)
+        if not concentration["top_exposures"].empty:
+            st.dataframe(concentration["top_exposures"], width="stretch", hide_index=True)
+        for note in concentration["findings"]:
+            st.write(note)
+
+    vintage = portfolio_analysis.get("vintage", {})
+    if vintage.get("available"):
+        st.markdown("<div class='panel-header'><h3>Origination Vintages</h3></div>", unsafe_allow_html=True)
+        st.dataframe(vintage["cohorts"], width="stretch", hide_index=True)
+        for note in vintage["findings"]:
+            st.write(note)
 
 
 def page_header(title: str, subtitle: str) -> None:
@@ -3071,7 +3636,35 @@ elif page == "Model Performance":
         st.caption("Group attributes are excluded from model inputs. Descriptive diagnostics may be unstable for small samples.")
     else:
         st.caption("No held-out protected-group diagnostics are stored in this model bundle.")
+    st.markdown("<div class='panel-header'><h3>Retrain</h3></div>", unsafe_allow_html=True)
+    st.caption(
+        "Retraining replaces the served bundle. The new run records its held-out test split, which "
+        "is what the calibration page uses for an out-of-sample comparison."
+    )
+    if st.button("Retrain model", key="retrain_model", width="stretch"):
+        with st.spinner("Retraining and comparing models..."):
+            source = frame if "distress_label" in frame.columns else make_demo_data()
+            note = "retrained on the loaded dataset" if "distress_label" in frame.columns else "retrained on synthetic demo data"
+            retrained = train_models(source, protected_attribute="owner_gender")
+            joblib.dump(retrained, DEFAULT_MODEL_PATH)
+            get_bundle.clear()
+        log_event(st.session_state.setdefault("audit_events", []), audit_event(
+            "Model retrained",
+            f"{retrained['model_name']} selected; {note}.",
+            _dataset_label(dataset_key),
+        ))
+        st.success(
+            f"Retrained: {retrained['model_name']} is now the served model ({note}). "
+            "Open Model Calibration for an out-of-sample reliability view."
+        )
+        st.rerun()
     disclaimer()
+
+elif page == "Stress Testing":
+    render_stress_page(frame, company_rows, row_index, bundle)
+
+elif page == "Model Calibration":
+    render_calibration_page(frame, bundle)
 
 elif page == "Model Monitoring":
     render_monitoring_page(bundle)

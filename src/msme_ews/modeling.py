@@ -122,6 +122,9 @@ def train_models(frame: pd.DataFrame, target_column: str = "distress_label",
         "cv_metrics": cv_scores, "test_metrics": _metrics(test_y, test_probabilities, test_predictions),
         "test_rows": int(len(test_indices)),
         "test_companies": int(groups.iloc[test_indices].nunique()) if groups is not None else None,
+        # Retained so the app can report calibration on held-out rows.
+        "test_probabilities": [float(value) for value in test_probabilities],
+        "test_labels": [int(value) for value in test_y],
         "evaluation_note": "Synthetic demo data results are illustrative only." if is_demo else "Dataset-specific research estimates, not lending decisions.",
     }
     if protected_attribute and protected_attribute in data:
@@ -135,3 +138,40 @@ def train_models(frame: pd.DataFrame, target_column: str = "distress_label",
     return {"model": selected_pipeline, "model_name": selected_name, "features": list(MODEL_FEATURES),
             "background": np.asarray(background)[:min(100, len(background))], "report": report,
             "is_demo": is_demo}
+
+
+def calibration_sample(
+    bundle: dict[str, Any],
+    frame: pd.DataFrame,
+    target_column: str = "distress_label",
+) -> dict[str, Any]:
+    """Probabilities and outcomes used for calibration diagnostics.
+
+    Prefers the held-out test split recorded during training so the comparison is
+    out-of-sample. When those values are absent, scores the supplied frame and
+    reports that the sample is in-sample, which flatters calibration.
+    """
+    report = bundle.get("report", {})
+    probabilities = report.get("test_probabilities")
+    labels = report.get("test_labels")
+    if probabilities is not None and labels is not None and len(probabilities) == len(labels):
+        return {
+            "probabilities": list(probabilities),
+            "labels": list(labels),
+            "basis": "held-out test split",
+            "is_in_sample": False,
+        }
+    if target_column not in frame.columns:
+        return {"probabilities": [], "labels": [], "basis": "unavailable", "is_in_sample": False}
+    target = _target_values(frame[target_column])
+    features = engineer_features(frame)
+    model = bundle.get("model")
+    if model is None or not all(name in features.columns for name in bundle.get("features", [])):
+        return {"probabilities": [], "labels": [], "basis": "unavailable", "is_in_sample": False}
+    predictions = model.predict_proba(features[bundle["features"]])[:, 1]
+    return {
+        "probabilities": [float(value) for value in predictions],
+        "labels": [int(value) for value in target],
+        "basis": "scored on the loaded dataset, so it is in-sample",
+        "is_in_sample": True,
+    }
