@@ -40,10 +40,22 @@ def _finite(value: object) -> float | None:
     return parsed if np.isfinite(parsed) else None
 
 
-def analyze_financials(frame: pd.DataFrame, row_index: int) -> dict[str, Any]:
-    """Calculate ratios and data coverage for a selected company-period."""
+def analyze_financials(
+    frame: pd.DataFrame,
+    row_index: int,
+    features: pd.DataFrame | None = None,
+) -> dict[str, Any]:
+    """Calculate ratios and data coverage for a selected company-period.
+
+    ``features`` accepts an already engineered frame so repeated single-record
+    lookups reuse one feature pass instead of re-deriving every row.
+    """
     row = frame.iloc[row_index]
-    feature = engineer_features(frame).iloc[row_index]
+    feature = (
+        features.iloc[row_index]
+        if features is not None
+        else engineer_features(frame).iloc[row_index]
+    )
     base_fields = [column for column in FINANCIAL_COLUMNS if column != "Sales_Growth"]
     available = [column for column in base_fields if _finite(row.get(column)) is not None]
     ratios = {
