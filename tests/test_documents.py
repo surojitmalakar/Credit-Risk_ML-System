@@ -7,6 +7,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
 from msme_ews.documents import extract_financial_document
+from msme_ews.portfolio import analyze_credit_portfolio
 
 
 def test_csv_normalizes_aliases_indian_numbers_and_periods():
@@ -24,6 +25,60 @@ def test_csv_normalizes_aliases_indian_numbers_and_periods():
     assert row["Net_Profit"] == 5_000_000
     assert row["Debt"] == 4_000_000
     assert row["Current_Assets"] == 1_000_000
+
+
+def test_customer_master_csv_uses_dataset_path_and_detects_portfolio_risk():
+    content = (
+        "CustomerID,Income,Loan Amount,Credit Score,Default Status,City\n"
+        "C001,600000,150000,720,No,Pune\n"
+        "C002,350000,220000,540,Yes,Mumbai\n"
+        "C003,500000,100000,630,Current,Delhi\n"
+    ).encode()
+
+    extracted = extract_financial_document(content, "customer_master.csv")
+    portfolio = analyze_credit_portfolio(extracted.frame)
+
+    assert extracted.document_type == "customer_loan_dataset"
+    assert len(extracted.frame) == 3
+    assert extracted.frame.loc[0, "customer_id"] == "C001"
+    assert extracted.frame.loc[0, "Revenue"] == 600_000
+    assert extracted.frame.loc[1, "loan_amount"] == 220_000
+    assert portfolio["summary"]["observed_default_rate"] == 1 / 3
+    assert portfolio["customers"]["portfolio_risk_category"].tolist() == [
+        "Low Risk",
+        "High Risk",
+        "Moderate Risk",
+    ]
+
+
+def test_unrecognized_csv_returns_columns_and_unsupported_classification():
+    content = b"customer_ref,region,signup_date\nA1,North,2024-01-03\n"
+
+    extracted = extract_financial_document(content, "customers.csv")
+
+    assert extracted.document_type == "unsupported"
+    assert extracted.detected_columns == ["customer_ref", "region", "signup_date"]
+    assert "No recognized financial or credit-risk columns" in extracted.status
+    assert "customer_ref" in extracted.warnings[-1]
+
+
+def test_financial_customer_dataset_keeps_borrower_rows_for_existing_model_inputs():
+    content = (
+        "Borrower ID,Annual Income,Profit,Assets,Liabilities,Debt,Credit Score,Default\n"
+        "B-01,1000000,100000,900000,400000,250000,710,No\n"
+        "B-02,800000,-20000,500000,420000,350000,560,Yes\n"
+    ).encode()
+
+    extracted = extract_financial_document(content, "borrowers.csv")
+
+    assert extracted.document_type == "customer_loan_dataset"
+    assert len(extracted.frame) == 2
+    assert extracted.frame["company_id"].tolist() == ["B-01", "B-02"]
+    assert extracted.frame["Revenue"].tolist() == [1_000_000, 800_000]
+    assert extracted.frame["Net_Profit"].tolist() == [100_000, -20_000]
+    assert extracted.frame["Debt"].tolist() == [250_000, 350_000]
+    assert extracted.frame["credit_score"].tolist() == [710, 560]
+    assert analyze_credit_portfolio(extracted.frame)["summary"]["observed_default_rate"] == 0.5
 
 
 def test_csv_transposed_statement_extracts_multiple_financial_years():

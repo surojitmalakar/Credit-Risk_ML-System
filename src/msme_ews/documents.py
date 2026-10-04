@@ -113,6 +113,228 @@ class DocumentExtraction:
     company_name: str
     tables_found: int = 0
     warnings: list[str] = field(default_factory=list)
+    document_type: str = "financial_statement"
+    detected_columns: list[str] = field(default_factory=list)
+
+
+_TABULAR_ALIASES = {
+    "company": "company_id",
+    "company id": "company_id",
+    "company name": "company_id",
+    "entity": "company_id",
+    "entity name": "company_id",
+    "business name": "company_id",
+    "customer id": "customer_id",
+    "customerid": "customer_id",
+    "customer identifier": "customer_id",
+    "client id": "customer_id",
+    "borrower id": "customer_id",
+    "borrowerid": "customer_id",
+    "borrower identifier": "customer_id",
+    "account id": "customer_id",
+    "loan id": "loan_id",
+    "loanid": "loan_id",
+    "customer name": "customer_name",
+    "borrower name": "customer_name",
+    "client name": "customer_name",
+    "name": "customer_name",
+    "credit score": "credit_score",
+    "cibil score": "credit_score",
+    "bureau score": "credit_score",
+    "loan amount": "loan_amount",
+    "sanctioned amount": "loan_amount",
+    "principal amount": "loan_amount",
+    "outstanding amount": "loan_amount",
+    "loan balance": "loan_amount",
+    "default status": "default_status",
+    "defaulted": "default_status",
+    "is default": "default_status",
+    "is defaulted": "default_status",
+    "default flag": "default_status",
+    "default label": "default_status",
+    "delinquent": "default_status",
+    "bad loan": "default_status",
+    "loan status": "loan_status",
+    "repayment status": "loan_status",
+    "payment status": "loan_status",
+    "risk status": "risk_status",
+    "risk category": "risk_status",
+    "risk level": "risk_status",
+    "credit risk": "risk_status",
+    "application status": "loan_status",
+}
+_CUSTOMER_ID_COLUMNS = {"customer_id", "loan_id"}
+_CREDIT_COLUMNS = {
+    "credit_score", "loan_amount", "default_status", "loan_status", "risk_status",
+}
+
+
+def _normalize_tabular_columns(frame: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    """Normalize financial and credit headers while retaining unrelated columns."""
+    renamed: dict[object, str] = {}
+    normalized_values = frame.copy()
+    for column in frame.columns:
+        key = _clean_key(column)
+        financial = _metric(column)
+        canonical = financial or _TABULAR_ALIASES.get(key)
+        if canonical is None and key in {"period", "year", "financial year", "fiscal year", "date", "reporting period"}:
+            canonical = "period"
+        if canonical is None and key in {"customer id", "customer number", "borrower number", "member id"}:
+            canonical = "customer_id"
+        if canonical is None and key in {
+            "income", "annual income", "yearly income", "monthly income",
+            "salary", "annual salary", "annual revenue",
+        }:
+            canonical = "Revenue"
+        if canonical is None and key == "profit":
+            canonical = "Net_Profit"
+        if canonical is None and key in {"total debt", "total borrowings", "borrowings"}:
+            canonical = "Debt"
+        if canonical is None and key in {"default", "defaulted"}:
+            canonical = "default_status"
+        renamed[column] = canonical or str(column).strip()
+        if financial in FINANCIAL_COLUMNS or canonical in {"credit_score", "loan_amount"}:
+            normalized_values[column] = normalized_values[column].map(
+                lambda value: _number(value, _scale_hint(column))
+            )
+            if financial == "Sales_Growth" and "%" in str(column):
+                normalized_values[column] = normalized_values[column] / 100
+    normalized = normalized_values.rename(columns=renamed).copy()
+    # Duplicate aliases can occur in exports (for example both Sales and Revenue).
+    # Preserve the first non-empty value in the canonical field instead of rejecting
+    # the entire borrower table.
+    if normalized.columns.duplicated().any():
+        merged = pd.DataFrame(index=normalized.index)
+        for column in dict.fromkeys(normalized.columns):
+            matching = normalized.loc[:, normalized.columns == column]
+            merged[column] = matching.bfill(axis=1).iloc[:, 0]
+        normalized = merged
+    detected = [str(column) for column in normalized.columns]
+    return normalized, detected
+
+
+def _tabular_document_type(frame: pd.DataFrame) -> str:
+    columns = set(map(str, frame.columns))
+    financial_columns = {
+        column for column in columns
+        if column in FINANCIAL_COLUMNS
+    }
+    credit_columns = columns & _CREDIT_COLUMNS
+    has_customer_id = bool(columns & _CUSTOMER_ID_COLUMNS) or "customer_name" in columns
+    if has_customer_id and (credit_columns or financial_columns):
+        return "customer_loan_dataset"
+    if credit_columns:
+        return "financial_credit_dataset" if financial_columns else "customer_loan_dataset"
+    if financial_columns:
+        return "financial_credit_dataset"
+    return "unsupported"
+
+
+def _looks_like_statement_layout(frame: pd.DataFrame) -> bool:
+    columns = [_clean_key(column) for column in frame.columns]
+    has_metric_rows_label = any(
+        column in {"particulars", "particular", "line item", "financial item", "description", "account", "metric"}
+        for column in columns
+    )
+    has_year_columns = any(_period(column) is not None for column in frame.columns)
+    values_contain_financial_labels = any(
+        _metric(value) is not None
+        for value in frame.iloc[:, 0].dropna().head(40)
+    ) if not frame.empty else False
+    return has_year_columns and (has_metric_rows_label or values_contain_financial_labels)
+
+
+def _read_tabular_file(content: bytes, suffix: str) -> tuple[pd.DataFrame, list[str]]:
+    if suffix == ".csv":
+        last_error: Exception | None = None
+        for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+            try:
+                frame = pd.read_csv(io.BytesIO(content), sep=None, engine="python", encoding=encoding)
+                return frame, ["CSV"]
+            except (UnicodeDecodeError, pd.errors.ParserError) as error:
+                last_error = error
+        raise ValueError(f"CSV could not be parsed: {last_error}")
+    try:
+        sheets = pd.read_excel(io.BytesIO(content), sheet_name=None)
+    except ImportError as error:
+        raise ValueError(f"Excel support dependency is unavailable: {error}") from error
+    tables = [table for table in sheets.values() if not table.empty]
+    if not tables:
+        return pd.DataFrame(), list(sheets)
+    frame = pd.concat(tables, ignore_index=True, sort=False)
+    return frame, list(sheets)
+
+
+def _extract_tabular_document(content: bytes, filename: str, suffix: str) -> DocumentExtraction:
+    frame, sources = _read_tabular_file(content, suffix)
+    if frame.empty:
+        return DocumentExtraction(
+            frame=frame,
+            status="The workbook or CSV has no data rows.",
+            source_type=suffix.lstrip(".").upper(),
+            company_name=Path(filename).stem,
+            tables_found=len(sources),
+            warnings=[f"Read sheet or source: {name}" for name in sources],
+            document_type="unsupported",
+        )
+    normalized, detected = _normalize_tabular_columns(frame)
+    document_type = _tabular_document_type(normalized)
+    company_column = next(
+        (column for column in ("customer_name", "company_id", "customer_id", "loan_id") if column in normalized),
+        None,
+    )
+    company = (
+        str(normalized[company_column].dropna().iloc[0])
+        if company_column and normalized[company_column].notna().any()
+        else Path(filename).stem.replace("_", " ").replace("-", " ").strip()
+    )
+    if company_column in {"customer_name", "customer_id", "loan_id"}:
+        normalized["company_id"] = normalized[company_column].astype("string")
+    if "period" not in normalized:
+        period_column = next(
+            (column for column in ("year", "financial_year", "fiscal_year", "date", "reporting_period") if column in normalized),
+            None,
+        )
+        if period_column:
+            normalized["period"] = normalized[period_column].map(_period)
+    else:
+        normalized["period"] = normalized["period"].map(
+            lambda value: _period(value) if pd.notna(value) else None
+        )
+    if document_type == "financial_credit_dataset" and {"company_id", "period"} <= set(normalized.columns):
+        normalized = normalized.groupby(
+            ["company_id", "period"],
+            as_index=False,
+            dropna=False,
+            sort=False,
+        ).agg(lambda values: values.bfill().iloc[0] if values.notna().any() else np.nan)
+    status = {
+        "financial_credit_dataset": f"Detected a financial/credit dataset with {len(normalized)} record(s).",
+        "customer_loan_dataset": f"Detected a customer/loan dataset with {len(normalized)} borrower record(s).",
+        "unsupported": "No recognized financial or credit-risk columns were found.",
+    }.get(document_type, f"Detected a financial statement dataset with {len(normalized)} record(s).")
+    warnings = [f"Read sheet: {name}" for name in sources if suffix != ".csv"]
+    if document_type == "unsupported":
+        warnings.append(
+            "Detected columns: " + (", ".join(detected) if detected else "none") +
+            ". Expected financial values (revenue, profit, assets, liabilities, debt) or credit fields "
+            "(customer/loan ID, credit score, loan amount, default/loan/risk status)."
+        )
+    if document_type == "customer_loan_dataset" and not set(FINANCIAL_COLUMNS) & set(normalized.columns):
+        warnings.append(
+            "This dataset contains credit/customer fields but no financial statement columns; "
+            "the existing financial-statement ML model will not be applied."
+        )
+    return DocumentExtraction(
+        frame=normalized,
+        status=status,
+        source_type=suffix.lstrip(".").upper(),
+        company_name=company,
+        tables_found=len(sources),
+        warnings=warnings,
+        document_type=document_type,
+        detected_columns=detected,
+    )
 
 
 def _clean_key(value: object) -> str:
@@ -492,6 +714,14 @@ def extract_financial_document(
         raise ValueError("Supported upload formats are CSV, XLSX, XLS, and PDF.")
     if not content:
         raise ValueError("The uploaded document is empty.")
+
+    if suffix in {".csv", ".xlsx", ".xls"}:
+        tabular_result = _extract_tabular_document(content, filename, suffix)
+        if (
+            tabular_result.document_type != "unsupported"
+            or not _looks_like_statement_layout(tabular_result.frame)
+        ):
+            return tabular_result
 
     tables: list[pd.DataFrame] = []
     text_parts: list[str] = []

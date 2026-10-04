@@ -16,7 +16,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from html import escape
 
-from msme_ews.data import validate_financial_data
+from msme_ews.data import FINANCIAL_COLUMNS, validate_financial_data
 from msme_ews.credit_assessment import apply_scenario_adjustments, generate_risk_interpretation
 from msme_ews.demo import make_demo_data
 from msme_ews.documents import extract_financial_document
@@ -30,6 +30,7 @@ from msme_ews.financial_analysis import (
 )
 from msme_ews.features import engineer_features
 from msme_ews.modeling import train_models
+from msme_ews.portfolio import analyze_credit_portfolio
 from msme_ews.prediction import DEFAULT_MODEL_PATH, predict_financial_health
 from msme_ews.reports import create_credit_assessment_pdf, create_excel_analysis
 
@@ -1271,8 +1272,70 @@ if uploaded is not None:
     try:
         with st.spinner("Extracting and normalizing financial statements locally..."):
             document_result = extract_financial_document(uploaded, uploaded.name)
+            detected_type = document_result.document_type.replace("_", " ").title()
+            if document_result.document_type == "unsupported":
+                st.error(
+                    "This file was read, but no usable financial or credit-risk data was found."
+                )
+                st.write(
+                    "Detected columns: "
+                    + (", ".join(document_result.detected_columns) or "None")
+                )
+                st.info(
+                    "For customer/loan analysis, include a customer or loan identifier plus a "
+                    "credit score, loan amount, or default/loan/risk status. For financial analysis, "
+                    "include numeric revenue/income, profit, assets, liabilities, or debt columns."
+                )
+                st.stop()
+            if document_result.document_type == "customer_loan_dataset":
+                credit_portfolio = analyze_credit_portfolio(document_result.frame)
+                financial_columns = [
+                    column for column in FINANCIAL_COLUMNS
+                    if column in document_result.frame
+                    and pd.to_numeric(document_result.frame[column], errors="coerce").notna().any()
+                ]
+                if not financial_columns:
+                    st.success(
+                        f"Document analysis: {document_result.status} "
+                        f"Detected type: {detected_type}. Format: {document_result.source_type}."
+                    )
+                    for warning in document_result.warnings:
+                        st.caption(warning)
+                    summary = credit_portfolio["summary"]
+                    st.subheader("Portfolio Risk Summary")
+                    metrics = st.columns(4)
+                    metrics[0].metric("Borrower / loan records", summary["record_count"])
+                    metrics[1].metric(
+                        "Observed default rate",
+                        f"{summary['observed_default_rate']:.1%}"
+                        if summary["observed_default_rate"] is not None
+                        else "Not available",
+                    )
+                    metrics[2].metric(
+                        "Average credit score",
+                        f"{summary['average_credit_score']:.0f}"
+                        if summary["average_credit_score"] is not None
+                        else "Not available",
+                    )
+                    metrics[3].metric(
+                        "Total loan amount",
+                        f"{summary['total_loan_amount']:,.2f}"
+                        if summary["total_loan_amount"] is not None
+                        else "Not available",
+                    )
+                    st.caption(
+                        f"Default status observed for {summary['observed_default_coverage']} of "
+                        f"{summary['record_count']} records. Customer risk bands are transparent "
+                        "indicators, not model-generated default probabilities."
+                    )
+                    st.subheader("Customer / Loan Risk Indicators")
+                    st.dataframe(credit_portfolio["customers"], width="stretch", hide_index=True)
+                    st.stop()
             frame = validate_financial_data(document_result.frame)
-        st.success(f"Document analysis: {document_result.status} Format: {document_result.source_type}.")
+        st.success(
+            f"Document analysis: {document_result.status} "
+            f"Detected type: {detected_type}. Format: {document_result.source_type}."
+        )
         for warning in document_result.warnings:
             st.caption(warning)
         st.caption("Document contents are processed locally; verify extracted figures against the source statement.")
@@ -1351,6 +1414,41 @@ def selected_assessment() -> dict:
 
 
 current_assessment = selected_assessment()
+portfolio_analysis = (
+    analyze_credit_portfolio(document_result.frame)
+    if document_result is not None and document_result.document_type == "customer_loan_dataset"
+    else None
+)
+
+if portfolio_analysis is not None and page == "Executive Overview":
+    portfolio_summary = portfolio_analysis["summary"]
+    st.markdown("<div class='panel-header'><h3>Portfolio Risk Summary</h3></div>", unsafe_allow_html=True)
+    portfolio_metrics = st.columns(4)
+    portfolio_metrics[0].metric("Borrower / loan records", portfolio_summary["record_count"])
+    portfolio_metrics[1].metric(
+        "Observed default rate",
+        f"{portfolio_summary['observed_default_rate']:.1%}"
+        if portfolio_summary["observed_default_rate"] is not None
+        else "Not available",
+    )
+    portfolio_metrics[2].metric(
+        "Average credit score",
+        f"{portfolio_summary['average_credit_score']:.0f}"
+        if portfolio_summary["average_credit_score"] is not None
+        else "Not available",
+    )
+    portfolio_metrics[3].metric(
+        "Total loan amount",
+        f"{portfolio_summary['total_loan_amount']:,.2f}"
+        if portfolio_summary["total_loan_amount"] is not None
+        else "Not available",
+    )
+    st.caption(
+        f"Observed default status for {portfolio_summary['observed_default_coverage']} of "
+        f"{portfolio_summary['record_count']} records. Portfolio bands use observed statuses "
+        "and transparent credit-score thresholds; they are not model-generated default probabilities."
+    )
+    st.dataframe(portfolio_analysis["customers"], width="stretch", hide_index=True)
 
 
 def page_header(title: str, subtitle: str) -> None:
