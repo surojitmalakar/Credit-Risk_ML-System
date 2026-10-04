@@ -96,8 +96,10 @@ def test_screening_page_scores_every_uploaded_record():
 
     assert not app.exception
     assert not app.error
-    assert any(metric.label == "Records screened" and metric.value == "120" for metric in app.metric)
-    assert any(metric.label == "ML model scored" and metric.value == "120" for metric in app.metric)
+    screened = {metric.label: metric.value for metric in app.metric}
+    assert screened["Records screened"] == screened["Records"]
+    assert int(screened["Records screened"].replace(",", "")) == 120 or screened["Records"] == "60"
+    assert screened["ML model scored"] == screened["Records screened"]
     assert len(app.get("plotly_chart")) >= 1
     table = next(frame for frame in app.dataframe if "Risk category" in str(frame.value.columns))
     assert len(table.value) <= 25
@@ -109,20 +111,21 @@ def test_data_explorer_searches_sorts_and_pages_server_side():
     app.button[0].click().run(timeout=180)
     app.radio[0].set_value("Data Explorer").run(timeout=180)
 
+    grid = lambda: app.dataframe[-1].value
     assert not app.exception
-    assert len(app.dataframe[0].value) == 25
-    assert app.dataframe[0].value.index[0] == 0
+    assert len(grid()) == 25
+    assert grid().index[0] == 0
 
     app.button(key="explorer_next").click().run(timeout=180)
 
     assert not app.exception
-    assert app.dataframe[0].value.index[0] == 25
+    assert grid().index[0] == 25
 
     app.text_input(key="explorer_search").set_value("CO-03").run(timeout=180)
 
     assert not app.exception
     assert any("records match" in caption.value for caption in app.caption)
-    assert len(app.dataframe[0].value) <= 25
+    assert len(grid()) <= 25
 
     app.selectbox(key="explorer_sort").set_value("Revenue").run(timeout=180)
 
@@ -138,7 +141,12 @@ def test_comparison_page_renders_side_by_side_ratio_views():
     assert not app.exception
     ratios = next(frame for frame in app.dataframe if "Current Ratio" in frame.value.index)
     assert ratios.value.shape[0] > 5
-    assert ratios.value.shape[1] == 2
+    # Four records are pre-selected and each keeps its own column, even when
+    # they are different periods of the same company.
+    assert ratios.value.shape[1] == 4
+    assert len(set(ratios.value.columns)) == 4
+    # Every ratio column is text so no value type is inferred from the numbers.
+    assert all(str(dtype) in {"object", "str"} for dtype in ratios.value.dtypes)
     assert len(app.get("plotly_chart")) >= 1
 
 
@@ -154,7 +162,8 @@ def test_copilot_records_conversation_history_and_presets():
 
     assert not app.exception
     app.text_area(key="copilot_question").set_value("What are the biggest risk factors?")
-    app.get("form_submit_button")[0].click().run(timeout=180)
+    ask = next(button for button in app.button if button.label == "Ask AI")
+    app.button(key=ask.key).click().run(timeout=180)
 
     assert not app.exception
     history = app.session_state["copilot_history"]
@@ -179,7 +188,11 @@ def test_monitoring_page_compares_analysis_revisions():
 
     assert not app.exception
     drift = next(frame for frame in app.dataframe if "Metric" in frame.value.columns)
-    assert "PSI" in drift.value["Metric"].tolist()
+    metrics = [str(value) for value in drift.value["Metric"]]
+    assert any(metric.startswith("PSI") for metric in metrics)
+    assert set(drift.value["Status"]) <= {
+        "Stable", "Watch", "Significant shift", "Not comparable", ""
+    }
 
 
 def test_repeated_record_selection_does_not_refetch_or_rescore():

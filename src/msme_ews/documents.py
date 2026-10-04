@@ -760,10 +760,9 @@ def extract_financial_document(
 
     if suffix in {".csv", ".xlsx", ".xls"}:
         tabular_result = _extract_tabular_document(content, filename, suffix)
-        if (
-            tabular_result.document_type != "unknown_dataset"
-            or not _looks_like_statement_layout(tabular_result.frame)
-        ):
+        if tabular_result.document_type in {"customer_loan_dataset", "financial_credit_dataset"}:
+            return tabular_result
+        if tabular_result.document_type == "unknown_dataset" and not _looks_like_statement_layout(tabular_result.frame):
             return tabular_result
 
     tables: list[pd.DataFrame] = []

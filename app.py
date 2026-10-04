@@ -1704,12 +1704,28 @@ def render_screening_page(frame: pd.DataFrame, features: pd.DataFrame, flags: pd
     )
 
 
+def _snapshot_label(snapshot: dict, seen: set[str]) -> str:
+    """Unique column label for a compared record.
+
+    Two periods of the same company share a name, so a counter is appended only
+    when the label is already taken.
+    """
+    base = f"{snapshot['company']} · {snapshot['period']}"
+    label = base
+    counter = 2
+    while label in seen:
+        label = f"{base} ({counter})"
+        counter += 1
+    seen.add(label)
+    return label
+
+
 def _format_ratio(value: object) -> str:
     """Format one ratio for display; mixed text keeps the column a plain string."""
-    if value is None or (isinstance(value, float) and pd.isna(value)):
+    if value is None:
         return "Not available"
-    if isinstance(value, (int, float, np.floating, np.integer)):
-        return f"{float(value):,.3f}"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return "Not available" if pd.isna(value) else f"{float(value):,.3f}"
     return str(value)
 
 
@@ -1748,19 +1764,16 @@ def render_comparison_page(frame: pd.DataFrame, features: pd.DataFrame, flags: p
         for label in snapshot["ratios"]:
             if label not in ratio_labels:
                 ratio_labels.append(label)
-    comparison = pd.DataFrame(
-        {
-            snapshot["company"]: {
-                label: (
-                    snapshot["ratios"].get(label)
-                    if snapshot["ratios"].get(label) is not None
-                    else "Not available"
-                )
-                for label in ratio_labels
-            }
-            for snapshot in snapshots
+    # Records of the same company collapse into one column if the company name is
+    # used as the key, so label every column with company and period.
+    seen_labels: set[str] = set()
+    comparison_columns: dict[str, dict[str, str]] = {}
+    for snapshot in snapshots:
+        comparison_columns[_snapshot_label(snapshot, seen_labels)] = {
+            label: _format_ratio(snapshot["ratios"].get(label))
+            for label in ratio_labels
         }
-    )
+    comparison = pd.DataFrame(comparison_columns)
     st.markdown("<div class='panel-header'><h3>Ratio comparison</h3></div>", unsafe_allow_html=True)
     st.dataframe(comparison, width="stretch", key="comparison_ratios")
     st.caption("Zero denominators are treated as missing rather than zero; missing inputs are not treated as healthy.")
