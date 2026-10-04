@@ -14,6 +14,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+from html import escape
 
 from msme_ews.data import validate_financial_data
 from msme_ews.credit_assessment import apply_scenario_adjustments, generate_risk_interpretation
@@ -32,7 +33,7 @@ st.set_page_config(
 )
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700;800&display=swap');
 :root {
     color-scheme: dark;
     --page:#07111F;
@@ -47,9 +48,9 @@ st.markdown("""
     --text:#F8FAFC;
     --muted:#94A3B8;
     --border:#1E293B;
-    --shadow:rgba(15, 23, 42, 0.48);
+    --shadow:rgba(2, 6, 23, 0.24);
 }
-html, body, [class*="css"] { font-family:'Manrope',sans-serif; color:var(--text); }
+html, body, [class*="css"] { font-family:'Inter','Manrope',sans-serif; color:var(--text); }
 html, body { width:100%; max-width:100%; overflow-x:hidden; }
 .stApp, [data-testid="stAppViewContainer"] { background:var(--page); }
 header[data-testid="stHeader"] { background:rgba(7, 17, 31, 0.9); }
@@ -60,17 +61,17 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
 [data-testid="stMetricDelta"], [data-testid="stMarkdownContainer"] *,
 [data-testid="stWidgetLabel"] * { color:var(--text) !important; }
 [data-testid="stCaptionContainer"], .stCaption { color:var(--muted) !important; }
-[data-testid="stMainBlockContainer"] { max-width:100%; padding-top:1.25rem; padding-bottom:3rem; }
+[data-testid="stMainBlockContainer"] { max-width:100%; padding-top:.8rem; padding-bottom:2rem; }
 [data-testid="stMetric"], [data-testid="stDataFrame"], [data-testid="stTable"],
 [data-testid="stPlotlyChart"], [data-testid="stVerticalBlockBorderWrapper"],
 [data-testid="stExpander"], [data-testid="stForm"], .block-container {
     min-width:0;
     background:var(--panel);
     border:1px solid var(--border);
-    border-radius:18px;
-    box-shadow:0 18px 40px var(--shadow);
+    border-radius:16px;
+    box-shadow:0 8px 22px var(--shadow);
 }
-[data-testid="stMetric"] { padding:18px 18px 14px; }
+[data-testid="stMetric"] { padding:14px 16px 12px; }
 [data-testid="stMetricLabel"] { color:var(--muted) !important; }
 [data-testid="stMetricValue"] { color:var(--text) !important; }
 [data-testid="stDataFrame"], [data-testid="stTable"] { max-width:100%; overflow-x:auto; }
@@ -82,6 +83,10 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
 [data-testid="stSidebar"], [data-testid="stSidebarContent"] {
     background:var(--sidebar) !important;
     border-right:1px solid #1B2C3E;
+}
+[data-testid="stSidebar"] {
+    min-width:15rem !important;
+    max-width:15rem !important;
 }
 [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2,
 [data-testid="stSidebar"] h3, [data-testid="stSidebar"] h4,
@@ -130,20 +135,20 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
     border-color:#60A5FA !important;
     color:#EFF6FF !important;
 }
-.eyebrow { font:600 11px 'DM Mono',monospace; color:#94A3B8; text-transform:uppercase; letter-spacing:.12em; }
+.eyebrow { font:600 11px 'Inter','Manrope',sans-serif; color:#94A3B8; text-transform:uppercase; letter-spacing:.08em; }
 .topbar {
     display:flex;
     flex-wrap:wrap;
     justify-content:space-between;
     align-items:center;
-    gap:1rem;
-    padding:1.05rem 0 1.5rem;
+    gap:.75rem;
+    padding:.25rem 0 .65rem;
 }
 .topbar-brand h1 {
     margin:0;
     font-size:clamp(2rem, 4vw, 3rem);
     line-height:1.05;
-    letter-spacing:-0.06em;
+    letter-spacing:-0.045em;
     font-weight:800;
 }
 .topbar-brand .subtitle {
@@ -160,7 +165,7 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
     background:rgba(16, 185, 129, 0.12);
     border:1px solid rgba(16, 185, 129, 0.38);
     color:#A7F3D0;
-    font:600 11px 'DM Mono',monospace;
+    font:600 11px 'Inter','Manrope',sans-serif;
     letter-spacing:.06em;
     text-transform:uppercase;
 }
@@ -170,53 +175,50 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
     height:.55rem;
     border-radius:50%;
     background:var(--healthy);
-    box-shadow:0 0 0 6px rgba(16, 185, 129, 0.18);
+    box-shadow:0 0 0 4px rgba(16, 185, 129, 0.12);
 }
 .kpi-card {
     background:var(--panel);
     border:1px solid var(--border);
-    border-radius:18px;
-    padding:1rem 1.1rem;
-    min-height:160px;
+    border-radius:14px;
+    padding:.8rem .9rem;
+    min-height:118px;
     position:relative;
-    overflow:hidden;
-}
-.kpi-card::after {
-    content:"";
-    position:absolute;
-    inset:auto -10% -55% auto;
-    width:130px;
-    height:130px;
-    background:radial-gradient(circle, rgba(37, 99, 235, 0.25), transparent 68%);
-    pointer-events:none;
+    border-top:2px solid var(--kpi-accent, var(--primary));
 }
 .kpi-label {
     color:var(--muted);
-    font-size:.78rem;
-    letter-spacing:.08em;
-    text-transform:uppercase;
-    font-family:'DM Mono',monospace;
+    font-size:.74rem;
+    font-weight:600;
+    letter-spacing:.02em;
 }
 .kpi-value {
-    margin-top:.7rem;
-    font-size:clamp(1.8rem, 3vw, 2.5rem);
+    margin-top:.4rem;
+    font-size:clamp(1.55rem, 2.6vw, 2rem);
     font-weight:800;
-    letter-spacing:-.05em;
+    letter-spacing:-.04em;
 }
 .kpi-trend {
-    margin-top:.65rem;
+    margin-top:.3rem;
     display:inline-flex;
     align-items:center;
     gap:.4rem;
     padding:.25rem .55rem;
     border-radius:999px;
-    font:600 12px 'DM Mono',monospace;
+    font:600 12px 'Inter','Manrope',sans-serif;
     background:rgba(148, 163, 184, 0.08);
     border:1px solid rgba(148, 163, 184, 0.14);
 }
-.kpi-trend.up { color:#A7F3D0; }
-.kpi-trend.down { color:#FECACA; }
+.kpi-trend.healthy { color:#A7F3D0; }
+.kpi-trend.watch { color:#FCD34D; }
+.kpi-trend.high { color:#FDBA74; }
+.kpi-trend.critical { color:#FCA5A5; }
 .kpi-trend.neutral { color:#BFDBFE; }
+.kpi-card.healthy { --kpi-accent:var(--healthy); }
+.kpi-card.watch { --kpi-accent:var(--warning); }
+.kpi-card.high { --kpi-accent:#F97316; }
+.kpi-card.critical { --kpi-accent:var(--danger); }
+.kpi-card.neutral { --kpi-accent:var(--cyan); }
 .risk-note {
     border:1px solid rgba(239, 68, 68, 0.32);
     border-left:4px solid var(--danger);
@@ -232,7 +234,7 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
     border:1px solid var(--border);
     border-radius:18px;
 }
-.risk-category-label { color:var(--muted) !important; font-size:.78rem; letter-spacing:.08em; font-family:'DM Mono',monospace; }
+.risk-category-label { color:var(--muted) !important; font-size:.78rem; letter-spacing:.04em; font-family:'Inter','Manrope',sans-serif; }
 .risk-category-value {
     display:inline-flex;
     margin-top:.65rem;
@@ -243,15 +245,16 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
     letter-spacing:.03em;
 }
 .risk-category-value.healthy { background:rgba(16, 185, 129, 0.14); color:#A7F3D0 !important; }
-.risk-category-value.warning { background:rgba(245, 158, 11, 0.12); color:#FCD34D !important; }
-.risk-category-value.danger { background:rgba(239, 68, 68, 0.12); color:#FCA5A5 !important; }
+.risk-category-value.watch { background:rgba(245, 158, 11, 0.12); color:#FCD34D !important; }
+.risk-category-value.high { background:rgba(249, 115, 22, 0.12); color:#FDBA74 !important; }
+.risk-category-value.critical { background:rgba(239, 68, 68, 0.12); color:#FCA5A5 !important; }
 .risk-category-value.neutral { background:rgba(148, 163, 184, 0.12); color:#E2E8F0 !important; }
 .panel-header {
     display:flex;
     align-items:center;
     justify-content:space-between;
     gap:1rem;
-    margin:1.5rem 0 .8rem;
+    margin:1rem 0 .55rem;
     padding:0;
 }
 .panel-header h3 {
@@ -262,28 +265,28 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
 .panel {
     background:var(--panel);
     border:1px solid var(--border);
-    border-radius:18px;
-    padding:1rem;
-    box-shadow:0 18px 40px var(--shadow);
+    border-radius:16px;
+    padding:.8rem;
+    box-shadow:0 8px 22px var(--shadow);
 }
 .copilot-box {
     background:var(--panel);
-    border:1px solid rgba(59, 130, 246, 0.28);
-    border-radius:18px;
-    padding:1rem;
+    border:1px solid rgba(59, 130, 246, 0.24);
+    border-radius:16px;
+    padding:.85rem;
 }
 .copilot-input {
-    background:#0B1728 !important;
+    background:#07111F !important;
     color:var(--text) !important;
     border:1px solid rgba(96, 165, 250, 0.22) !important;
     border-radius:12px !important;
-    min-height:120px !important;
+    min-height:76px !important;
 }
 .copilot-output {
-    background:rgba(15, 23, 42, 0.6);
+    background:#07111F;
     border:1px solid rgba(148, 163, 184, 0.18);
     border-radius:14px;
-    padding:1rem;
+    padding:.75rem .85rem;
     color:#E2E8F0;
     line-height:1.6;
 }
@@ -294,13 +297,49 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
     padding:1rem;
     box-shadow:0 18px 40px var(--shadow);
 }
+.risk-summary-card {
+    background:var(--panel);
+    border:1px solid var(--border);
+    border-left:3px solid var(--risk-accent, var(--cyan));
+    border-radius:14px;
+    padding:.8rem .9rem;
+}
+.risk-summary-card.healthy { --risk-accent:var(--healthy); }
+.risk-summary-card.watch { --risk-accent:var(--warning); }
+.risk-summary-card.high { --risk-accent:#F97316; }
+.risk-summary-card.critical { --risk-accent:var(--danger); }
+.risk-summary-card .risk-state {
+    display:flex;
+    align-items:center;
+    gap:.45rem;
+    font-weight:700;
+    margin-bottom:.35rem;
+}
+.risk-summary-card p { color:var(--muted) !important; margin:.3rem 0; line-height:1.5; }
+.driver-legend { color:var(--muted); font-size:.78rem; margin:.1rem 0 .45rem; }
+.signal-list { display:grid; gap:.45rem; }
+.signal-item {
+    display:flex;
+    align-items:flex-start;
+    gap:.55rem;
+    padding:.55rem .65rem;
+    border:1px solid var(--border);
+    border-radius:11px;
+    background:var(--panel);
+    line-height:1.35;
+}
+.signal-indicator { flex:0 0 auto; font-size:.9rem; line-height:1.35; }
+.signal-item strong { display:block; font-size:.88rem; color:var(--text); }
+.signal-item span { display:block; color:var(--muted); font-size:.78rem; margin-top:.08rem; }
+.creator-credit { color:var(--muted); font-size:.75rem; font-weight:500; }
+.main .stButton button, [data-testid="stFormSubmitButton"] button { width:100%; }
 .assessment-card {
-    background:linear-gradient(180deg, rgba(12, 21, 31, 1), rgba(10, 18, 28, 1));
-    border:1px solid rgba(96, 165, 250, 0.2);
-    border-radius:18px;
-    padding:1.15rem 1.2rem;
-    margin:1rem 0 1.5rem;
-    box-shadow:0 18px 40px rgba(2, 6, 23, 0.42);
+    background:var(--panel);
+    border:1px solid var(--border);
+    border-radius:16px;
+    padding:1rem 1.1rem;
+    margin:.75rem 0 1rem;
+    box-shadow:0 8px 22px var(--shadow);
 }
 .assessment-card h3 {
     margin:0 0 .9rem;
@@ -322,7 +361,7 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
     border:1px solid rgba(148, 163, 184, 0.14);
 }
 .assessment-label {
-    font:600 11px 'DM Mono',monospace;
+    font:600 11px 'Inter','Manrope',sans-serif;
     color:#94A3B8;
     letter-spacing:.08em;
     text-transform:uppercase;
@@ -351,7 +390,7 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
     letter-spacing:.08em;
     text-transform:uppercase;
     color:#94A3B8;
-    font-family:'DM Mono',monospace;
+    font-family:'Inter','Manrope',sans-serif;
 }
 .assessment-bullets {
     list-style:none;
@@ -428,7 +467,7 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
 .workflow-step .tag {
     display:inline-block;
     margin-top:.4rem;
-    font:600 10px 'DM Mono',monospace;
+    font:600 10px 'Inter','Manrope',sans-serif;
     letter-spacing:.08em;
     color:#94A3B8;
     text-transform:uppercase;
@@ -458,7 +497,7 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
     background:rgba(37, 99, 235, 0.12);
     border:1px solid rgba(96, 165, 250, 0.22);
     color:#DBEAFE;
-    font:600 12px 'DM Mono',monospace;
+    font:600 12px 'Inter','Manrope',sans-serif;
     letter-spacing:.04em;
 }
 @media (max-width: 767px) {
@@ -509,11 +548,18 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
         min-width:0 !important;
     }
     [data-testid="stSidebar"][aria-expanded="true"] {
-        width:min(86vw, 20rem) !important;
-        min-width:min(86vw, 20rem) !important;
-        max-width:86vw !important;
+        width:min(78vw, 17rem) !important;
+        min-width:min(78vw, 17rem) !important;
+        max-width:78vw !important;
     }
+    [data-testid="stSidebar"] { min-width:0 !important; max-width:none !important; }
     [data-testid="stMetric"] { width:100%; padding:14px; }
+    .kpi-card { min-height:0; padding:.75rem .8rem; }
+    .topbar { padding:.15rem 0 .4rem; }
+    .topbar-brand .subtitle { font-size:.86rem; line-height:1.4; max-width:32rem; }
+    .panel-header { margin:.8rem 0 .45rem; }
+    .panel { padding:.65rem; }
+    .assessment-card { padding:.85rem; margin:.7rem 0 1rem; }
     [data-testid="stDataFrame"], [data-testid="stTable"] {
         max-width:100%;
         overflow-x:auto;
@@ -527,7 +573,7 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
     }
     [data-testid="stFileUploader"] section { width:100%; }
     [data-testid="stImage"] img { width:auto; max-width:min(100%, 220px); }
-    .stApp button, .stApp [role="button"] { min-height:46px; }
+    .stApp button, .stApp [role="button"] { min-height:44px; }
     h1 { font-size:clamp(1.65rem, 7vw, 2.1rem); }
     h2 { font-size:clamp(1.3rem, 5.5vw, 1.65rem); }
     h3 { font-size:clamp(1.1rem, 4.5vw, 1.35rem); }
@@ -543,10 +589,10 @@ def style_chart(
     margin: dict[str, int] | None = None,
 ) -> None:
     figure.update_layout(
-        template="plotly_white",
+        template="plotly_dark",
         paper_bgcolor="#0D1B2A",
         plot_bgcolor="#0D1B2A",
-        font={"family": "Manrope, sans-serif", "color": "#F8FAFC", "size": 12},
+        font={"family": "Inter, Manrope, sans-serif", "color": "#F8FAFC", "size": 12},
         title_font={"color": "#F8FAFC", "size": 16},
         legend={
             "font": {"color": "#F8FAFC", "size": 12},
@@ -554,7 +600,7 @@ def style_chart(
             "bordercolor": "#1E293B",
             "borderwidth": 1,
         },
-        margin=margin or {"t": 56, "r": 16, "b": 44, "l": 16},
+        margin=margin or {"t": 36, "r": 12, "b": 38, "l": 12},
         height=height,
         autosize=True,
     )
@@ -562,16 +608,16 @@ def style_chart(
         color="#E2E8F0",
         title_font={"color": "#E2E8F0"},
         tickfont={"color": "#94A3B8"},
-        gridcolor="#1E293B",
-        zerolinecolor="#334155",
+        gridcolor="rgba(148, 163, 184, 0.12)",
+        zerolinecolor="rgba(148, 163, 184, 0.24)",
         automargin=True,
     )
     figure.update_yaxes(
         color="#E2E8F0",
         title_font={"color": "#E2E8F0"},
         tickfont={"color": "#94A3B8"},
-        gridcolor="#1E293B",
-        zerolinecolor="#334155",
+        gridcolor="rgba(148, 163, 184, 0.12)",
+        zerolinecolor="rgba(148, 163, 184, 0.24)",
         automargin=True,
     )
 
@@ -602,23 +648,98 @@ def _state_color(value: str) -> str:
     if "low" in value:
         return "healthy"
     if "moderate" in value:
-        return "warning"
+        return "watch"
     if "high" in value:
-        return "danger"
+        return "high"
+    if "critical" in value:
+        return "critical"
     return "neutral"
 
 
-def render_kpi_card(label: str, value: str, trend: str | None = None, trend_direction: str = "neutral") -> None:
+def render_kpi_card(label: str, value: str, status: str, state: str = "neutral") -> None:
     st.markdown(
         f"""
-        <div class="kpi-card">
+        <div class="kpi-card {state}">
             <div class="kpi-label">{label}</div>
             <div class="kpi-value">{value}</div>
-            {f'<div class="kpi-trend {trend_direction}">{trend}</div>' if trend else ''}
+            <div class="kpi-trend {state}">{status}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+
+def render_shap_drivers(result: dict) -> None:
+    drivers = []
+    for direction, key in (("Risk increased", "top_risk_factors"), ("Risk reduced", "protective_factors")):
+        for factor in result.get(key, []):
+            contribution = factor.get("contribution")
+            if contribution is None or pd.isna(contribution):
+                continue
+            feature = str(factor.get("feature", "Feature")).replace("_", " ")
+            drivers.append({
+                "Feature": feature,
+                "Contribution": float(contribution),
+                "Direction": direction,
+            })
+    if not drivers:
+        st.info("SHAP drivers are not available for this record.")
+        return
+
+    driver_frame = pd.DataFrame(drivers).sort_values("Contribution")
+    figure = px.bar(
+        driver_frame,
+        x="Contribution",
+        y="Feature",
+        color="Direction",
+        orientation="h",
+        color_discrete_map={"Risk increased": "#EF4444", "Risk reduced": "#10B981"},
+        category_orders={"Direction": ["Risk increased", "Risk reduced"]},
+    )
+    figure.update_layout(
+        title=None,
+        xaxis_title="SHAP contribution to distress output",
+        yaxis_title=None,
+        showlegend=True,
+        legend_title_text=None,
+        coloraxis_showscale=False,
+    )
+    render_chart(figure, height=min(320, 145 + 24 * len(driver_frame)), margin={"t": 12, "r": 12, "b": 38, "l": 12})
+    st.caption("Positive SHAP values increase the model output for distress; negative values reduce it. SHAP contributions are not causal.")
+
+
+_WARNING_PRESENTATION = {
+    "Rapid revenue decline": ("critical", "Revenue declined beyond the configured warning threshold."),
+    "Negative operating cash flow": ("critical", "Operating cash flow is negative for this period."),
+    "Increasing leverage": ("warning", "Leverage is high or rising compared with the prior period."),
+    "Falling liquidity": ("warning", "Liquidity is below threshold or declining."),
+    "Deteriorating margins": ("watch", "Margin indicators are negative or deteriorating."),
+    "Increasing receivable days": ("watch", "Receivables are taking longer to collect."),
+    "Falling interest coverage": ("warning", "Interest coverage is low or falling."),
+}
+
+
+def render_warning_signals(active_signals: list[str]) -> None:
+    st.markdown("<div class='panel-header'><h3>⚠ Early Warning Signals</h3></div>", unsafe_allow_html=True)
+    if not active_signals:
+        st.markdown(
+            "<div class='signal-item'><span class='signal-indicator'>🟢</span>"
+            "<div><strong>Healthy</strong><span>No configured early-warning conditions are triggered.</span></div></div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    symbols = {"watch": "🟡", "warning": "🟠", "critical": "🔴"}
+    labels = {"watch": "Watch", "warning": "Warning", "critical": "Critical"}
+    items = []
+    for signal in active_signals:
+        severity, detail = _WARNING_PRESENTATION.get(signal, ("watch", "Configured early-warning condition is triggered."))
+        items.append(
+            f"<div class='signal-item'><span class='signal-indicator'>{symbols[severity]}</span>"
+            f"<div><strong>{escape(signal)} · {labels[severity]}</strong>"
+            f"<span>{escape(detail)}</span></div></div>"
+        )
+    st.markdown(f"<div class='signal-list'>{''.join(items)}</div>", unsafe_allow_html=True)
 
 
 def render_credit_assessment_panel(company_name: str, result: dict, selected_features: pd.DataFrame, flags: pd.DataFrame, row_index: int) -> None:
@@ -697,7 +818,7 @@ def render_credit_assessment_panel(company_name: str, result: dict, selected_fea
             </div>
             <div class="assessment-recommendation">{recommendation}</div>
             <div class="assessment-priorities">
-                <h4 style="margin:0; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:#94A3B8; font-family:'DM Mono',monospace;">Early-warning priorities</h4>
+                <h4 style="margin:0; font-size:.8rem; letter-spacing:.04em; color:#94A3B8; font-family:'Inter','Manrope',sans-serif;">Early-warning priorities</h4>
                 <ol>
                     {''.join(f'<li>{item}</li>' for item in priorities)}
                 </ol>
@@ -720,10 +841,25 @@ def render_ai_risk_interpretation(
         warning_signals=warning_signals,
         shap_factors=result.get("top_risk_factors", []),
     )
-    st.subheader("🤖 AI Risk Interpretation")
-    st.markdown(f"**{interpretation['risk_category']}**")
-    st.write(interpretation["explanation"])
-    st.markdown(f"**Priority:** {interpretation['priority']}")
+    state = _state_color(interpretation["risk_category"])
+    symbols = {"healthy": "🟢", "watch": "🟡", "high": "🟠", "critical": "🔴", "neutral": "⚪"}
+    risk_heading = {
+        "Low Risk": "LOW CREDIT RISK",
+        "Moderate Risk": "MODERATE CREDIT RISK",
+        "High Risk": "HIGH CREDIT RISK",
+        "Critical Risk": "CRITICAL CREDIT RISK",
+    }.get(interpretation["risk_category"], interpretation["risk_category"].upper())
+    st.markdown("<div class='panel-header'><h3>AI Risk Summary</h3></div>", unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div class="risk-summary-card {state}">
+            <div class="risk-state">{symbols[state]} {escape(risk_heading)}</div>
+            <p>{escape(interpretation['explanation'])}</p>
+            <p><strong>Priority:</strong> {escape(interpretation['priority'])}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     if result.get("top_risk_factors"):
         st.caption("SHAP contributions explain model behavior; they are associations, not causal findings.")
 
@@ -867,8 +1003,19 @@ def generate_credit_copilot_response(question: str, context: dict) -> str:
     )
 
 
-PAGES = ["Executive Overview", "MSME Financial Health", "Risk Prediction", "Explainable AI",
-         "Early-Warning Indicators", "Model Performance", "Methodology", "About"]
+NAVIGATION = {
+    "🏠 Overview": "Executive Overview",
+    "📊 Financial Health": "MSME Financial Health",
+    "🎯 Risk Prediction": "Risk Prediction",
+    "🤖 AI Copilot": "AI Copilot",
+    "🔍 Explainability": "Explainable AI",
+    "⚠️ Early Warning": "Early-Warning Indicators",
+    "🔮 Scenario Simulator": "Scenario Simulator",
+    "📄 Credit Assessment": "Credit Assessment",
+    "📈 Model Performance": "Model Performance",
+    "🧠 Methodology": "Methodology",
+    "ℹ️ About": "About",
+}
 
 
 @st.cache_resource
@@ -884,27 +1031,68 @@ def get_bundle() -> dict:
 
 st.sidebar.markdown("<div class='eyebrow'>CREDIT INTELLIGENCE</div>", unsafe_allow_html=True)
 st.sidebar.title("CREDIT RISK AI")
-st.sidebar.caption("AI-Powered MSME Financial Intelligence & Early Warning System")
-page = st.sidebar.radio("Workspace", PAGES, label_visibility="collapsed")
-uploaded = st.sidebar.file_uploader("Upload financial CSV", type="csv")
+selected_navigation = st.sidebar.radio("Workspace", list(NAVIGATION), label_visibility="collapsed")
+page = NAVIGATION[selected_navigation]
 bundle = get_bundle()
 
+st.markdown(
+    """
+    <div class="topbar">
+        <div class="topbar-brand">
+            <h1>CREDIT RISK AI</h1>
+            <div class="subtitle">AI-Powered MSME Financial Intelligence &amp; Early Warning System</div>
+        </div>
+        <div class="creator-credit">Made by Surojit Malakar • SkillseED India</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+selector_cols = st.columns([1.25, 1, 1.2])
+with selector_cols[2]:
+    uploaded = st.file_uploader("Upload financial CSV", type="csv", key="financial_csv_upload")
 if uploaded is not None:
     try:
         frame = validate_financial_data(pd.read_csv(uploaded))
-        st.sidebar.caption("Using uploaded data. Validate its provenance and target definition.")
+        st.caption("Using uploaded data. Validate its provenance and target definition.")
         is_demo = False
     except Exception as error:
-        st.sidebar.error(str(error))
+        st.error(str(error))
         frame, is_demo = make_demo_data(), True
 else:
     frame, is_demo = make_demo_data(), True
-    st.sidebar.caption("Using synthetic illustrative demo data.")
+    st.caption("Using synthetic illustrative demo data.")
 
 features = engineer_features(frame)
 flags = early_warning_indicators(frame)
-row_index = st.sidebar.selectbox("Company-period", options=list(range(len(frame))), format_func=lambda index: (
-    f"{frame.iloc[index].get('company_id', 'Row')} · {frame.iloc[index].get('period', index)}"))
+if "company_id" in frame:
+    company_values = frame["company_id"].astype(str)
+    company_options = company_values.drop_duplicates().tolist()
+else:
+    company_values = pd.Series(["All records"] * len(frame), index=frame.index)
+    company_options = ["All records"]
+
+with selector_cols[0]:
+    selected_company = st.selectbox("Company", company_options, key="company_filter")
+
+if "company_id" in frame:
+    company_rows = [
+        position
+        for position, company in enumerate(company_values)
+        if company == selected_company
+    ]
+else:
+    company_rows = list(range(len(frame)))
+
+with selector_cols[1]:
+    row_index = st.selectbox(
+        "Period",
+        options=company_rows,
+        format_func=lambda index: str(
+            frame.iloc[index].get("period", f"Record {index + 1}")
+        ),
+        key="period_filter",
+    )
+
 selected, selected_features = frame.iloc[[row_index]], features.iloc[[row_index]]
 
 
@@ -922,11 +1110,7 @@ def show_risk() -> dict:
     result = predict_financial_health(selected, bundle=bundle)
     left, middle, right = st.columns(3)
     left.metric("Estimated distress probability", f"{result['distress_probability']:.1%}")
-    risk_class = {
-        "Low Risk": "healthy",
-        "Moderate Risk": "warning",
-        "High Risk": "danger",
-    }.get(result["risk_category"], "neutral")
+    risk_class = _state_color(result["risk_category"])
     middle.markdown(
         f"<div class='risk-category-card' role='group' aria-label='Risk category: "
         f"{result['risk_category']}'><div class='risk-category-label'>Risk category</div>"
@@ -939,216 +1123,211 @@ def show_risk() -> dict:
     return result
 
 
-if page == "Executive Overview":
+if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit Assessment"}:
+    is_overview = page == "Executive Overview"
     result = predict_financial_health(selected, bundle=bundle, include_explanations=False)
-    try:
-        local_explanation = explain_prediction(bundle, selected)
-        result["top_risk_factors"] = local_explanation["risk_factors"]
-        result["protective_factors"] = local_explanation["protective_factors"]
-    except Exception as error:
-        st.warning(f"SHAP risk drivers are unavailable for this record: {error}")
+    active_warning_signals = flags.iloc[row_index][flags.iloc[row_index]].index.tolist()
+    if page in {"Executive Overview", "AI Copilot"}:
+        try:
+            local_explanation = explain_prediction(bundle, selected)
+            result["top_risk_factors"] = local_explanation["risk_factors"]
+            result["protective_factors"] = local_explanation["protective_factors"]
+        except Exception as error:
+            st.warning(f"SHAP risk drivers are unavailable for this record: {error}")
     company_name = str(frame.iloc[row_index].get("company_id", "Selected Company"))
     health_score = max(0.0, min(100.0, (1 - result["distress_probability"]) * 100.0))
     current_ratio = selected_features.iloc[0].get("Current_Ratio", float("nan"))
-    total_flags = int(flags.iloc[row_index].sum())
     risk_class = _state_color(result["risk_category"])
-    trend_label = "Stable" if health_score >= 70 else "Watchlist" if health_score >= 45 else "Elevated"
-    trend_direction = "up" if result["risk_category"] in {"Low Risk", "Moderate Risk"} else "down"
-
-    st.markdown(
-        """
-        <div class="topbar">
-            <div class="topbar-brand">
-                <div class="eyebrow">CREDIT RISK AI</div>
-                <h1>CREDIT RISK AI</h1>
-                <div class="subtitle">AI-Powered MSME Financial Intelligence & Early Warning System</div>
-            </div>
-            <div class="live-badge">Live</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    selector_cols = st.columns([2.2, 2, 2, 1.1])
-    with selector_cols[0]:
-        st.selectbox("Company", options=list(range(len(frame))), index=row_index, format_func=lambda idx: str(frame.iloc[idx].get("company_id", f"Company {idx + 1}")), key="company_selector")
-    with selector_cols[1]:
-        st.selectbox("Period", options=list(range(len(frame))), index=row_index, format_func=lambda idx: str(frame.iloc[idx].get("period", f"P{idx + 1}")), key="period_selector")
-    with selector_cols[2]:
-        st.file_uploader("Upload CSV", type="csv", label_visibility="collapsed")
-    with selector_cols[3]:
-        st.button("Refresh")
-
-    st.markdown("<div class='panel-header'><h3>Executive dashboard</h3><div class='eyebrow'>Made by Surojit Malakar • SkillseED India</div></div>", unsafe_allow_html=True)
-    metric_cols = st.columns(4)
-    with metric_cols[0]:
-        render_kpi_card("Financial Health Score", f"{health_score:.0f}/100", "▲ Strong", "up")
-    with metric_cols[1]:
-        render_kpi_card("Default Risk Probability", f"{result['distress_probability']:.1%}", "▼ Risk", "down")
-    with metric_cols[2]:
-        render_kpi_card("Current Ratio", f"{current_ratio:.2f}x" if pd.notna(current_ratio) else "N/A", "◎ Liquid", "up")
-    with metric_cols[3]:
-        risk_tag = result["risk_category"].upper()
-        render_kpi_card("AI Risk Status", risk_tag, trend_label, "neutral")
-
-    render_credit_assessment_panel(company_name, result, selected_features, flags, row_index)
-    active_warning_signals = flags.iloc[row_index][flags.iloc[row_index]].index.tolist()
-    render_ai_risk_interpretation(result, selected_features.iloc[0], active_warning_signals)
-
-    st.markdown("<div class='panel-header'><h3>Credit intelligence workflow</h3></div>", unsafe_allow_html=True)
-    st.markdown(
-        """
-        <div class="workflow-wrapper">
-            <div class="workflow-grid">
-                <div class="workflow-step"><div class="title">CSV / Financial Data</div><div class="tag">Input</div></div>
-                <div class="workflow-step"><div class="title">Financial Analysis</div><div class="tag">Ratio Logic</div></div>
-                <div class="workflow-step"><div class="title">ML Risk Model</div><div class="tag">Prediction</div></div>
-                <div class="workflow-step"><div class="title">SHAP Explainability</div><div class="tag">Drivers</div></div>
-                <div class="workflow-step"><div class="title">Early Warning Engine</div><div class="tag">Signals</div></div>
-                <div class="workflow-step"><div class="title">AI</div><div class="tag">Copilot</div></div>
-                <div class="workflow-step"><div class="title">AI Credit Copilot</div><div class="tag">Actions</div></div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        """
-        <div class="feature-row">
-            <div class="feature-pill">Risk Explanation</div>
-            <div class="feature-pill">Recommendations</div>
-            <div class="feature-pill">Scenario Analysis</div>
-            <div class="feature-pill">Credit Report</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    if is_demo:
-        st.info("Synthetic demo records and labels are illustrative only; they do not represent actual MSMEs.")
-
-    st.markdown("<div class='panel-header'><h3>AI CREDIT COPILOT</h3></div>", unsafe_allow_html=True)
-    copilot_context = build_credit_context(frame, selected, selected_features, flags, row_index, result)
-    with st.form("credit_copilot"):
-        question = st.text_area(
-            "Ask the copilot about this company",
-            value="Why is this company considered risky?",
-            key="copilot_question",
-            help="Use the company context, model output, and early-warning indicators to guide the answer.",
-            height=120,
+    if is_overview:
+        ratio_state = (
+            "neutral"
+            if pd.isna(current_ratio)
+            else "healthy"
+            if current_ratio >= 1
+            else "watch"
         )
-        submitted = st.form_submit_button("Analyze")
-    if submitted or True:
-        response = generate_credit_copilot_response(question, copilot_context)
-        st.markdown(f"<div class='copilot-output'>{response}</div>", unsafe_allow_html=True)
-
-    st.markdown("<div class='panel-header'><h3>AI Scenario Analysis</h3></div>", unsafe_allow_html=True)
-    st.caption("Adjust one-period assumptions to see how the existing risk model responds. Margin change is in percentage points; revenue and debt changes are relative percentages.")
-    with st.form("credit_scenario"):
-        scenario_cols = st.columns(3)
-        with scenario_cols[0]:
-            revenue_change = st.slider("Revenue change", min_value=-20, max_value=20, value=0, step=1, format="%d%%")
-        with scenario_cols[1]:
-            margin_change = st.slider("Operating margin change", min_value=-10, max_value=10, value=0, step=1, format="%d pp")
-        with scenario_cols[2]:
-            debt_change = st.slider("Debt change", min_value=-20, max_value=20, value=0, step=1, format="%d%%")
-        run_scenario = st.form_submit_button("RUN AI SIMULATION")
-
-    if run_scenario:
-        try:
-            scenario_data = apply_scenario_adjustments(
-                selected,
-                revenue_change=revenue_change / 100,
-                operating_margin_change=margin_change / 100,
-                debt_change=debt_change / 100,
+        health_label = "Strong" if health_score >= 70 else "Watch" if health_score >= 40 else "Critical"
+        metric_cols = st.columns(4)
+        with metric_cols[0]:
+            render_kpi_card("Financial Health", f"{health_score:.0f}/100", health_label, risk_class)
+        with metric_cols[1]:
+            render_kpi_card("Default Risk", f"{result['distress_probability']:.1%}", result["risk_category"], risk_class)
+        with metric_cols[2]:
+            render_kpi_card(
+                "Current Ratio",
+                f"{current_ratio:.2f}x" if pd.notna(current_ratio) else "N/A",
+                "Healthy" if ratio_state == "healthy" else "Watch" if ratio_state == "watch" else "Unavailable",
+                ratio_state,
             )
-            scenario_result = predict_financial_health(
-                scenario_data,
-                bundle=bundle,
-                include_explanations=False,
+        with metric_cols[3]:
+            render_kpi_card("AI Risk Status", result["risk_category"].upper(), "Stable" if risk_class == "healthy" else result["risk_category"], risk_class)
+
+    if page == "Credit Assessment":
+        render_credit_assessment_panel(company_name, result, selected_features, flags, row_index)
+        disclaimer()
+
+    if page in {"Executive Overview", "AI Copilot"}:
+        st.markdown(
+            "<div class='panel-header'><h3>🤖 AI Credit Copilot</h3></div>"
+            "<div class='creator-credit'>Ask anything about this company's financial health.</div>",
+            unsafe_allow_html=True,
+        )
+        copilot_context = build_credit_context(frame, selected, selected_features, flags, row_index, result)
+        with st.form("credit_copilot"):
+            question = st.text_area(
+                "Question",
+                value=f"Why is this company currently {result['risk_category'].lower()}?",
+                key="copilot_question",
+                help="Answers use the selected company-period's financials, model output, and warning signals.",
+                height=76,
+                label_visibility="collapsed",
+                placeholder="Ask about this company's financial health...",
             )
-            scenario_features = engineer_features(scenario_data).iloc[0]
-            scenario_warnings = early_warning_indicators(scenario_data).iloc[0]
-            scenario_signals = scenario_warnings[scenario_warnings].index.tolist()
+            submitted = st.form_submit_button("Ask AI")
+        response_signature = (
+            str(selected_company),
+            row_index,
+            float(result["distress_probability"]),
+            uploaded.name if uploaded is not None else "synthetic-demo",
+            uploaded.size if uploaded is not None else 0,
+            question,
+        )
+        if submitted or st.session_state.get("credit_copilot_signature") != response_signature:
+            response = generate_credit_copilot_response(question, copilot_context)
+            st.session_state["credit_copilot_response"] = response
+            st.session_state["credit_copilot_signature"] = response_signature
+        if st.session_state.get("credit_copilot_response"):
+            st.markdown(
+                f"<div class='copilot-output'>{escape(st.session_state['credit_copilot_response'])}</div>",
+                unsafe_allow_html=True,
+            )
+
+    if page in {"Executive Overview", "AI Copilot"}:
+        render_ai_risk_interpretation(result, selected_features.iloc[0], active_warning_signals)
+
+    if is_overview or page == "AI Copilot":
+        st.markdown("<div class='panel-header'><h3>Top Risk Drivers</h3></div>", unsafe_allow_html=True)
+        st.markdown(
+            "<div class='driver-legend'>Positive contribution increases distress output · Negative contribution reduces it</div>",
+            unsafe_allow_html=True,
+        )
+        render_shap_drivers(result)
+
+    if page == "Scenario Simulator":
+        page_header("Scenario Simulator", "Explore how adjusted financial assumptions change the model's estimate.")
+        st.caption("Adjust one-period assumptions to see how the existing risk model responds. Margin change is in percentage points; revenue and debt changes are relative percentages.")
+        with st.form("credit_scenario"):
+            scenario_cols = st.columns(3)
+            with scenario_cols[0]:
+                revenue_change = st.slider("Revenue change", min_value=-20, max_value=20, value=0, step=1, format="%d%%")
+            with scenario_cols[1]:
+                margin_change = st.slider("Operating margin change", min_value=-10, max_value=10, value=0, step=1, format="%d pp")
+            with scenario_cols[2]:
+                debt_change = st.slider("Debt change", min_value=-20, max_value=20, value=0, step=1, format="%d%%")
+            run_scenario = st.form_submit_button("Run AI simulation")
+
+        if run_scenario:
             try:
-                scenario_explanation = explain_prediction(bundle, scenario_data)
-                scenario_result["top_risk_factors"] = scenario_explanation["risk_factors"]
-            except Exception as error:
-                st.warning(f"SHAP scenario drivers are unavailable: {error}")
+                scenario_data = apply_scenario_adjustments(
+                    selected,
+                    revenue_change=revenue_change / 100,
+                    operating_margin_change=margin_change / 100,
+                    debt_change=debt_change / 100,
+                )
+                scenario_result = predict_financial_health(
+                    scenario_data,
+                    bundle=bundle,
+                    include_explanations=False,
+                )
+                scenario_features = engineer_features(scenario_data).iloc[0]
+                scenario_warnings = early_warning_indicators(scenario_data).iloc[0]
+                scenario_signals = scenario_warnings[scenario_warnings].index.tolist()
+                try:
+                    scenario_explanation = explain_prediction(bundle, scenario_data)
+                    scenario_result["top_risk_factors"] = scenario_explanation["risk_factors"]
+                    scenario_result["protective_factors"] = scenario_explanation["protective_factors"]
+                except Exception as error:
+                    st.warning(f"SHAP scenario drivers are unavailable: {error}")
 
-            probability_change_pp = (
-                scenario_result["distress_probability"] - result["distress_probability"]
-            ) * 100
-            scenario_metric, scenario_status = st.columns(2)
-            scenario_metric.metric(
-                "Projected Risk",
-                f"{scenario_result['distress_probability']:.1%}",
-                delta=f"{probability_change_pp:+.1f} percentage points",
-                delta_color="inverse",
-            )
-            scenario_status.metric("Current Risk", f"{result['distress_probability']:.1%}")
-            render_ai_risk_interpretation(
-                scenario_result,
-                scenario_features,
-                scenario_signals,
-            )
-            st.caption(
-                f"Applied assumptions: revenue {revenue_change:+d}%, "
-                f"operating margin {margin_change:+d} percentage points, "
-                f"debt {debt_change:+d}%."
-            )
-        except (TypeError, ValueError) as error:
-            st.error(f"Scenario could not be calculated: {error}")
+                probability_change_pp = (
+                    scenario_result["distress_probability"] - result["distress_probability"]
+                ) * 100
+                scenario_metric, scenario_status = st.columns(2)
+                scenario_metric.metric(
+                    "Projected risk",
+                    f"{scenario_result['distress_probability']:.1%}",
+                    delta=f"{probability_change_pp:+.1f} percentage points",
+                    delta_color="inverse",
+                )
+                scenario_status.metric("Current risk", f"{result['distress_probability']:.1%}")
+                render_ai_risk_interpretation(
+                    scenario_result,
+                    scenario_features,
+                    scenario_signals,
+                )
+                st.caption(
+                    f"Applied assumptions: revenue {revenue_change:+d}%, "
+                    f"operating margin {margin_change:+d} percentage points, "
+                    f"debt {debt_change:+d}%."
+                )
+            except (TypeError, ValueError) as error:
+                st.error(f"Scenario could not be calculated: {error}")
+        disclaimer()
 
-    chart_cols = st.columns([1.4, 1])
-    if "company_id" in frame and "period" in frame:
-        series = trend_data(frame, selected.iloc[0]["company_id"])
-        with chart_cols[0]:
-            st.markdown("<div class='panel-header'><h3>Financial trend</h3></div>", unsafe_allow_html=True)
+    if is_overview:
+        if is_demo:
+            st.info("Synthetic demo records and labels are illustrative only; they do not represent actual MSMEs.")
+
+        st.markdown("<div class='panel-header'><h3>Financial trends</h3></div>", unsafe_allow_html=True)
+        if "company_id" in frame and "period" in frame:
+            series = trend_data(frame, selected.iloc[0]["company_id"])
             if not series.empty:
-                chart = px.line(
+                trend_cols = st.columns(2)
+                revenue_chart = px.line(
                     series,
                     x="period",
-                    y=["Revenue", "Current_Ratio"],
+                    y="Revenue",
                     markers=True,
-                    title="Revenue and liquidity trend",
-                    color_discrete_sequence=["#2563EB", "#10B981"],
+                    color_discrete_sequence=["#2563EB"],
                 )
-                render_chart(chart, height=260)
+                revenue_chart.update_layout(title="Revenue", yaxis_title=None)
+                with trend_cols[0]:
+                    render_chart(revenue_chart, height=220, margin={"t": 24, "r": 10, "b": 38, "l": 10})
+
+                liquidity_chart = px.line(
+                    series,
+                    x="period",
+                    y="Current_Ratio",
+                    markers=True,
+                    color_discrete_sequence=["#06B6D4"],
+                )
+                liquidity_chart.update_layout(title="Current ratio", yaxis_title=None)
+                with trend_cols[1]:
+                    render_chart(liquidity_chart, height=220, margin={"t": 24, "r": 10, "b": 38, "l": 10})
             else:
                 st.info("Trend history is unavailable for the selected company.")
-    with chart_cols[1]:
-        st.markdown("<div class='panel-header'><h3>Risk drivers</h3></div>", unsafe_allow_html=True)
-        top_risk = result.get("top_risk_factors", [])
-        if top_risk:
-            ordered = top_risk[:5]
-            labels = [str(item.get("feature", "Risk factor")) for item in ordered]
-            values = [float(item.get("contribution", 0.0)) for item in ordered]
-            risk_fig = px.bar(
-                x=values,
-                y=labels,
-                orientation="h",
-                color=values,
-                color_continuous_scale=["#1E293B", "#EF4444"],
-                title="Top model drivers",
-            )
-            render_chart(risk_fig, height=260)
         else:
-            st.write("The model has not surfaced a strong local explanation for the current record.")
+            st.info("Add company and period fields to the CSV to view financial trends.")
 
-    st.markdown("<div class='panel-header'><h3>Early warning signals</h3></div>", unsafe_allow_html=True)
-    active = flags.iloc[row_index][flags.iloc[row_index]].index.tolist()
-    if active:
-        for signal in active:
-            st.markdown(f"- {signal}")
-    else:
-        st.write("No configured warning rules are currently triggered.")
+        render_warning_signals(active_warning_signals)
+        with st.expander("How this analysis works"):
+            st.markdown(
+                """
+                CSV / financial data → financial analysis → ML risk model → SHAP explainability
+                → early-warning engine → AI Credit Copilot
 
-    disclaimer()
+                The Copilot provides risk explanation, recommendations, scenario analysis, and a credit assessment.
+                """
+            )
+        disclaimer()
 
 elif page == "MSME Financial Health":
     page_header("MSME Financial Health", "Statement inputs and derived ratios for the selected company-period.")
-    st.dataframe(pd.concat([selected.reset_index(drop=True), selected_features.reset_index(drop=True)], axis=1).T.rename(columns={0: "Value"}), width="stretch")
+    financial_summary = pd.concat(
+        [selected.reset_index(drop=True), selected_features.reset_index(drop=True)],
+        axis=1,
+    ).T.rename(columns={0: "Value"}).astype(str)
+    st.dataframe(financial_summary, width="stretch")
     st.caption("Ratios use bounded calculations; zero denominators are treated as missing. Inventory days use a revenue proxy when COGS is unavailable.")
     disclaimer()
 
