@@ -117,15 +117,15 @@ def test_drift_report_marks_a_shifted_dataset_and_keeps_psi_rows():
 
 def test_prediction_stability_tracks_the_elevated_share():
     stability = prediction_stability([
-        pd.Series([0.1, 0.2, 0.3, 0.7]),
-        pd.Series([0.1, 0.2, 0.8, 0.9]),
+        pd.Series([10, 20, 30, 70]),
+        pd.Series([10, 20, 80, 90]),
     ])
     assert list(stability["Revision"]) == [1, 2]
     assert stability["Scored records"].tolist() == [4, 4]
-    assert stability["Elevated (>=60%)"].tolist() == [1, 2]
+    assert stability["Elevated (index >=60)"].tolist() == [1, 2]
     assert stability["Elevated share"].iloc[1] > stability["Elevated share"].iloc[0]
-    assert 0 <= stability["Mean risk"].iloc[0] <= 1
-    assert prediction_stability([pd.Series(dtype="float64")])["Mean risk"].isna().all()
+    assert 0 <= stability["Mean risk index"].iloc[0] <= 100
+    assert prediction_stability([pd.Series(dtype="float64")])["Mean risk index"].isna().all()
 
 
 def test_monitoring_alerts_describe_observed_movement():
@@ -138,7 +138,7 @@ def test_monitoring_alerts_describe_observed_movement():
     shifted_frame.loc[shifted_frame.index[:300], "Revenue"] *= 5
     current = build_snapshot("current", shifted_frame, engineer_features(shifted_frame))
     drift = drift_report(baseline, current)
-    alerts = monitoring_alerts(drift, [pd.Series([0.1] * 8 + [0.9] * 2), pd.Series([0.1] * 4 + [0.9] * 6)])
+    alerts = monitoring_alerts(drift, [pd.Series([10] * 8 + [90] * 2), pd.Series([10] * 4 + [90] * 6)])
     assert alerts
     assert any("shift" in alert.lower() for alert in alerts)
     assert any("elevated-risk records" in alert for alert in alerts)

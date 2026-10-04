@@ -19,9 +19,9 @@ from sklearn.metrics import accuracy_score, balanced_accuracy_score, mean_absolu
 
 
 _ROLE_PATTERNS: dict[str, tuple[str, ...]] = {
-    "revenue / income": ("revenue", "sales", "turnover", "net sales", "income", "earnings"),
-    "profit": ("profit", "pat", "net income", "earnings", "ebitda", "margin"),
-    "debt / exposure": ("debt", "borrow", "loan balance", "outstanding", "exposure", "principal"),
+    "revenue / income": ("revenue", "annual sales", "total sales", "sales", "turnover", "net sales", "income"),
+    "profit": ("net profit", "profit after tax", "profit after taxation", "profit", "pat", "net income", "earnings", "ebitda", "margin"),
+    "debt / exposure": ("total debt", "debt", "borrowings", "borrow", "loan balance", "loans", "outstanding", "exposure", "principal"),
     "credit score": ("credit score", "bureau score", "cibil", "fico", "score"),
     "customer identifier": ("customer id", "client id", "account id", "borrower id", "member id"),
     "default / risk target": ("default", "delinquen", "bad loan", "risk flag", "risk status", "fraud", "churn", "target", "label", "outcome"),
@@ -30,9 +30,14 @@ _ROLE_PATTERNS: dict[str, tuple[str, ...]] = {
     "geography": ("city", "state", "country", "region", "location", "pin", "postal"),
     "assets": ("asset", "receivable", "inventory"),
     "liabilities": ("liabilit", "payable"),
+    "cash flow": ("cash flow", "cashflow", "operating cash"),
 }
 _FINANCIAL_TERMS = {"revenue / income", "profit", "debt / exposure", "assets", "liabilities"}
-_TARGET_WORDS = ("default", "delinquen", "risk", "fraud", "churn", "target", "label", "outcome", "status")
+_TARGET_WORDS = (
+    "default", "delinquen", "bad loan", "risk flag", "risk status",
+    "fraud", "churn", "target", "label", "outcome", "loan status",
+    "repayment status",
+)
 _IDENTIFIER_WORDS = ("id", "identifier", "account", "reference", "ref", "code", "number", "uuid")
 # Enough values to decide whether a column holds dates without parsing all of them.
 _DATE_PROBE_ROWS = 2_000
@@ -56,16 +61,41 @@ def _numeric_value(value: object) -> float:
         return np.nan
     negative = text.startswith("(") and text.endswith(")")
     percent = "%" in text
+    scale = 1.0
+    scale_match = re.search(
+        r"\s*(thousand|million|billion|lakhs?|lacs?|crores?|cr|mn|bn|k)\s*$",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if scale_match:
+        scale_name = scale_match.group(1).lower()
+        scale = {
+            "thousand": 1_000,
+            "k": 1_000,
+            "lakh": 100_000,
+            "lakhs": 100_000,
+            "lac": 100_000,
+            "lacs": 100_000,
+            "crore": 10_000_000,
+            "crores": 10_000_000,
+            "cr": 10_000_000,
+            "million": 1_000_000,
+            "mn": 1_000_000,
+            "billion": 1_000_000_000,
+            "bn": 1_000_000_000,
+        }[scale_name]
+        text = text[:scale_match.start()]
     text = re.sub(r"[₹$€£]", "", text)
-    text = re.sub(r"(?i)\b(?:rs\.?|inr|usd|eur|gbp)\b", "", text)
-    text = text.replace(",", "").replace("(", "").replace(")", "").strip()
+    text = re.sub(r"(?i)\b(?:rs\.?|inr\b|usd\b|eur\b|gbp\b)", "", text)
+    text = text.replace(",", "").replace("%", "").replace("(", "").replace(")", "").strip()
     match = re.fullmatch(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", text)
     if not match:
         return np.nan
     number = float(text)
     if negative:
         number = -abs(number)
-    return number if not percent else number
+    result = number * scale
+    return result if np.isfinite(result) else np.nan
 
 
 def _role_for_column(column: object, values: pd.Series) -> list[str]:
@@ -101,7 +131,13 @@ def _looks_numeric(series: pd.Series, nonempty: int) -> pd.Series | None:
     except (TypeError, ValueError):
         return series.map(_numeric_value)
     converted = converted.replace([np.inf, -np.inf], np.nan)
-    if converted.notna().sum() / nonempty < 0.8:
+    probe = series.dropna().head(_DATE_PROBE_ROWS).astype(str)
+    needs_cleanup = probe.str.contains(
+        r"[₹$€£,()%]|\b(?:rs\.?|inr|usd|eur|gbp|thousand|million|billion|lakhs?|lacs?|crores?|cr|mn|bn|k)\b",
+        case=False,
+        regex=True,
+    ).any()
+    if needs_cleanup or converted.notna().sum() / nonempty < 0.8:
         return series.map(_numeric_value)
     return converted
 
@@ -113,14 +149,28 @@ def _parse_frame(frame: pd.DataFrame) -> tuple[pd.DataFrame, list[str], list[str
     for original in parsed.columns:
         column = str(original)
         source = parsed[original]
+        name = _key(column)
         if pd.api.types.is_numeric_dtype(source):
+            numeric_source = pd.to_numeric(source, errors="coerce")
+            if (
+                re.search(r"\b(year|financial year|fiscal year|period)\b", name)
+                and numeric_source.notna().any()
+                and numeric_source.dropna().between(1900, 2100).all()
+                and numeric_source.dropna().mod(1).eq(0).all()
+            ):
+                parsed[original] = pd.to_datetime(
+                    numeric_source.astype("Int64").astype("string"),
+                    format="%Y",
+                    errors="coerce",
+                )
+                date_columns.append(column)
+                continue
             parsed[original] = pd.to_numeric(source, errors="coerce")
             numeric_columns.append(column)
             continue
         nonempty = source.dropna()
         if nonempty.empty:
             continue
-        name = _key(column)
         date_hint = any(word in name for word in ("date", "time", "period", "year", "month"))
         # Date detection only needs a representative sample; parsing every value of a
         # large object column costs seconds and almost never changes the verdict.
@@ -153,19 +203,24 @@ def _dataset_type(
     filename_key = _key(filename)
     role_set = {role for matches in roles.values() for role in matches}
     kinds: list[str] = []
-    if role_set & _FINANCIAL_TERMS:
-        kinds.append("Financial statement" if "date / time" in role_set else "MSME/business dataset")
+    substantive_financial = role_set & {
+        "profit", "debt / exposure", "assets", "liabilities", "cash flow",
+    }
+    if substantive_financial:
+        kinds.append("Financial statement" if date_columns else "MSME/business dataset")
+    elif "revenue / income" in role_set:
+        kinds.append("Sales dataset")
     if "credit score" in role_set or "default / risk target" in role_set:
         kinds.append("Loan/credit dataset")
     if "customer identifier" in role_set or any(word in filename_key for word in ("customer", "client", "borrower")):
         kinds.append("Customer dataset")
     if "transaction amount" in role_set and date_columns:
         kinds.append("Transaction dataset")
-    if any(word in filename_key for word in ("sale", "sales", "order")) or "revenue / income" in role_set:
+    if any(word in filename_key for word in ("sale", "sales", "order")) and not kinds:
         kinds.append("Sales dataset")
     if not kinds and len(frame.columns) >= 2:
         if date_columns and numeric_columns:
-            kinds.append("Transaction dataset")
+            kinds.append("Time series dataset")
         elif role_set:
             kinds.append("MSME/business dataset")
     unique = list(dict.fromkeys(kinds))
@@ -179,12 +234,181 @@ def _target_columns(frame: pd.DataFrame, roles: dict[str, list[str]]) -> list[st
     for column in frame.columns:
         name = _key(column)
         values = frame[column].dropna()
-        if any(word in name for word in _TARGET_WORDS) and 1 < values.nunique() <= 20:
+        if any(word in name for word in _IDENTIFIER_WORDS):
+            continue
+        unique_count = values.nunique()
+        is_class_target = 1 < unique_count <= 20
+        is_numeric_regression_target = (
+            pd.api.types.is_numeric_dtype(frame[column])
+            and unique_count > 20
+        )
+        is_target = (
+            any(word in name for word in _TARGET_WORDS)
+            or any("default / risk target" in role for role in roles.get(str(column), []))
+        )
+        if is_target and (is_class_target or is_numeric_regression_target):
             targets.append(str(column))
-        elif any("default / risk target" in role for role in roles.get(str(column), [])):
-            if 1 < values.nunique() <= 20:
-                targets.append(str(column))
     return list(dict.fromkeys(targets))
+
+
+def _financial_metrics(data: pd.DataFrame) -> pd.DataFrame:
+    """Calculate financial indicators only from recognized, observed columns."""
+    normalized = {_key(column): str(column) for column in data.columns}
+
+    def find(*names: str) -> str | None:
+        return next((normalized[name] for name in names if name in normalized), None)
+
+    columns = {
+        "Revenue": find(
+            "revenue", "annual revenue", "annual sales", "net sales",
+            "total sales", "sales", "turnover",
+        ),
+        "Profit": find("net profit", "profit after tax", "profit after taxation", "pat", "net income"),
+        "EBITDA": find("ebitda", "operating profit"),
+        "Debt": find("total debt", "debt", "total borrowings", "borrowings", "loan balance", "loans"),
+        "Assets": find("total assets", "assets"),
+        "Liabilities": find("total liabilities", "liabilities"),
+        "Current assets": find("current assets", "total current assets"),
+        "Current liabilities": find("current liabilities", "total current liabilities"),
+        "Inventory": find("inventory", "inventories", "stock"),
+        "Interest expense": find("interest expense", "finance costs", "finance cost"),
+        "Operating cash flow": find("operating cash flow", "cash flow from operations", "cash flow operations"),
+        "Receivables": find("accounts receivable", "trade receivables", "receivables", "debtors"),
+        "Equity": find("equity value", "shareholders equity", "shareholder equity", "owners equity", "net worth"),
+        "Revenue growth": find("revenue growth", "sales growth"),
+        "Profit margin": find("profit margin", "net profit margin"),
+        "Current ratio": find("current ratio"),
+        "Quick ratio": find("quick ratio"),
+        "Debt-to-equity": find("debt to equity", "debt equity"),
+        "Debt-to-assets": find("debt to assets", "debt assets ratio"),
+        "Interest coverage": find("interest coverage"),
+        "Operating margin": find("operating margin", "ebitda margin"),
+    }
+
+    def values(key: str) -> pd.Series | None:
+        column = columns[key]
+        if column is None:
+            return None
+        parsed = pd.to_numeric(data[column], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        return parsed if parsed.notna().any() else None
+
+    def median(key: str, basis: str) -> tuple[float | None, str]:
+        series = values(key)
+        return (float(series.median()), basis) if series is not None else (None, basis)
+
+    def ratio(
+        numerator: pd.Series | None,
+        denominator: pd.Series | None,
+        basis: str,
+    ) -> tuple[float | None, str]:
+        if numerator is None or denominator is None:
+            return None, basis
+        aligned = pd.concat([numerator, denominator], axis=1).dropna()
+        aligned = aligned.loc[aligned.iloc[:, 1] != 0]
+        if aligned.empty:
+            return None, basis
+        return float((aligned.iloc[:, 0] / aligned.iloc[:, 1]).median()), basis
+
+    revenue = values("Revenue")
+    profit = values("Profit")
+    ebitda = values("EBITDA")
+    debt = values("Debt")
+    assets = values("Assets")
+    liabilities = values("Liabilities")
+    current_assets = values("Current assets")
+    current_liabilities = values("Current liabilities")
+    inventory = values("Inventory")
+    interest = values("Interest expense")
+    equity = values("Equity")
+    growth = values("Revenue growth")
+    if equity is None and assets is not None and liabilities is not None:
+        equity = assets - liabilities
+    if equity is None and assets is not None and debt is not None:
+        equity = assets - debt
+    quick_assets = (
+        current_assets - inventory
+        if current_assets is not None and inventory is not None
+        else None
+    )
+    if growth is None and revenue is not None:
+        period_column = find("period", "date", "year", "financial year", "fiscal year")
+        if period_column is not None:
+            periods = pd.to_datetime(data[period_column], errors="coerce", format="mixed")
+            company_column = find("company id", "company", "customer id", "borrower id")
+            grouping = (
+                data[company_column].astype("string").fillna("Missing")
+                if company_column is not None
+                else pd.Series("all", index=data.index)
+            )
+            growth_frame = pd.DataFrame({
+                "group": grouping,
+                "period": periods,
+                "revenue": revenue,
+            }).dropna(subset=["period", "revenue"])
+            changes = []
+            for _, group in growth_frame.groupby("group", sort=False):
+                ordered = group.sort_values("period")
+                prior = ordered["revenue"].shift(1)
+                valid = prior.notna() & prior.ne(0)
+                changes.extend((ordered.loc[valid, "revenue"] / prior.loc[valid] - 1).tolist())
+            if changes:
+                growth = pd.Series(changes, dtype="float64")
+
+    metrics: dict[str, tuple[float | None, str]] = {
+        "Revenue": median("Revenue", "Median of observed uploaded values; source units retained."),
+        "Revenue growth": (
+            float(growth.median()) if growth is not None else None,
+            "Median of the uploaded growth field or derived period-over-period revenue change."
+            if growth is not None else "A growth field or multiple dated revenue periods are required.",
+        ),
+        "Net profit": median("Profit", "Median of observed uploaded values; source units retained."),
+        "Profit margin": (
+            median("Profit margin", "Median of uploaded profit-margin field.")
+            if values("Profit margin") is not None
+            else ratio(profit, revenue, "Median of row-level profit / revenue; zero revenue rows omitted.")
+        ),
+        "Current ratio": (
+            median("Current ratio", "Median of uploaded current-ratio field.")
+            if values("Current ratio") is not None
+            else ratio(current_assets, current_liabilities, "Median of row-level current assets / current liabilities.")
+        ),
+        "Quick ratio": (
+            median("Quick ratio", "Median of uploaded quick-ratio field.")
+            if values("Quick ratio") is not None
+            else ratio(quick_assets, current_liabilities, "Median of (current assets - inventory) / current liabilities.")
+        ),
+        "Debt-to-equity": (
+            median("Debt-to-equity", "Median of uploaded debt-to-equity field.")
+            if values("Debt-to-equity") is not None
+            else ratio(debt, equity, "Median of row-level debt / equity; zero equity rows omitted.")
+        ),
+        "Debt-to-assets": (
+            median("Debt-to-assets", "Median of uploaded debt-to-assets field.")
+            if values("Debt-to-assets") is not None
+            else ratio(debt, assets, "Median of row-level debt / total assets; zero assets rows omitted.")
+        ),
+        "Interest coverage": (
+            median("Interest coverage", "Median of uploaded interest-coverage field.")
+            if values("Interest coverage") is not None
+            else ratio(ebitda, interest, "Median of row-level EBITDA / interest expense; zero interest rows omitted.")
+        ),
+        "Operating margin": (
+            median("Operating margin", "Median of uploaded operating-margin field.")
+            if values("Operating margin") is not None
+            else ratio(ebitda, revenue, "Median of row-level EBITDA / revenue; zero revenue rows omitted.")
+        ),
+        "Cash flow": median("Operating cash flow", "Median of observed uploaded operating cash-flow values."),
+        "Receivables": median("Receivables", "Median of observed uploaded receivables values."),
+        "Inventory": median("Inventory", "Median of observed uploaded inventory values."),
+    }
+    return pd.DataFrame([
+        {
+            "Metric": name,
+            "Value": value if value is not None else "Not available - required data not found.",
+            "Basis": basis,
+        }
+        for name, (value, basis) in metrics.items()
+    ])
 
 
 def _is_risk_label(value: object) -> bool:
@@ -205,8 +429,12 @@ def _model_result(frame: pd.DataFrame, target: str, identifiers: list[str]) -> d
     if len(usable) < 30:
         result["reason"] = "At least 30 labeled rows are required for a held-out evaluation."
         return result
-    if y.nunique() < 2 or y.nunique() > 20:
-        result["reason"] = "Target needs 2 to 20 observed classes for automatic classification."
+    if y.nunique() < 2 or (classification and y.nunique() > 20):
+        result["reason"] = (
+            "Classification targets need 2 to 20 observed classes."
+            if classification
+            else "The numeric target has fewer than two observed values."
+        )
         return result
     features = usable.drop(columns=[target, *[name for name in identifiers if name in usable]])
     features = features.loc[:, features.notna().mean().ge(0.2)]
@@ -276,7 +504,11 @@ def analyze_dataset(frame: pd.DataFrame, filename: str = "uploaded_data") -> dic
     identifiers = [
         str(column) for column in data.columns
         if any(word in _key(column).split() for word in _IDENTIFIER_WORDS)
-        or (data[column].nunique(dropna=True) / max(len(data), 1) >= 0.95 and data[column].nunique(dropna=True) > 10)
+        or (
+            not pd.api.types.is_numeric_dtype(data[column])
+            and data[column].nunique(dropna=True) / max(len(data), 1) >= 0.95
+            and data[column].nunique(dropna=True) > 10
+        )
     ]
     targets = _target_columns(data, roles)
     missing = data.isna().sum()
@@ -366,14 +598,22 @@ def analyze_dataset(frame: pd.DataFrame, filename: str = "uploaded_data") -> dic
             filled = SimpleImputer(strategy="median").fit_transform(anomaly_data)
             if np.isfinite(filled).all():
                 detector = IsolationForest(contamination="auto", random_state=42, n_estimators=100, n_jobs=1)
-                detector.fit(filled[:_ANOMALY_TRAIN_ROWS])
+                training_rows = min(len(filled), _ANOMALY_TRAIN_ROWS)
+                if training_rows < len(filled):
+                    train_indices = np.random.default_rng(42).choice(
+                        len(filled),
+                        size=training_rows,
+                        replace=False,
+                    )
+                    detector.fit(filled[train_indices])
+                else:
+                    detector.fit(filled)
                 # Scoring is linear in rows; bound it and record what was scored.
                 scored = filled[:_ANOMALY_SCORE_ROWS]
                 scores = -detector.score_samples(scored)
                 anomaly_rows_scored = len(scored)
-                cutoff = float(np.quantile(scores, 0.95))
                 anomaly_scores.iloc[:len(scored)] = scores
-                anomalies.iloc[:len(scored)] = scores >= cutoff
+                anomalies.iloc[:len(scored)] = detector.predict(scored) == -1
     target = targets[0] if targets else None
     segment_frame = pd.DataFrame()
     segment_columns = [
@@ -400,16 +640,25 @@ def analyze_dataset(frame: pd.DataFrame, filename: str = "uploaded_data") -> dic
                     for label in range(cluster_count)
                 ]
     missing_risk = data.isna().mean(axis=1) if len(data.columns) else pd.Series(0, index=data.index)
+    detected_pattern = np.select(
+        [
+            anomalies.to_numpy(),
+            missing_risk.to_numpy() >= 0.5,
+            np.arange(len(data)) >= anomaly_rows_scored,
+        ],
+        [
+            "Unusual multivariate pattern; review required",
+            "High missingness; interpretation is limited",
+            "Not anomaly-scored due to the runtime row limit",
+        ],
+        default="No anomaly flag",
+    )
     risk_results = pd.DataFrame({
         "Source row": np.arange(len(data)) + 1,
         "Missing %": (missing_risk * 100).round(2),
         "Anomaly score": anomaly_scores.round(5),
         "Anomaly": anomalies.to_numpy(),
-        "Detected Risk Pattern": np.where(
-            anomalies.to_numpy(),
-            "Unusual multivariate pattern; review required",
-            np.where(missing_risk.to_numpy() >= 0.5, "High missingness; interpretation is limited", "No anomaly flag"),
-        ),
+        "Detected Risk Pattern": detected_pattern,
     })
     model_result = _model_result(data, target, identifiers) if target else {
         "status": "not trained",
@@ -469,7 +718,7 @@ def analyze_dataset(frame: pd.DataFrame, filename: str = "uploaded_data") -> dic
         findings.append(f"Observed trend for {trend['Variable']}: {trend['Direction'].lower()}{change_text}.")
     if anomalies.any():
         findings.append(
-            f"{int(anomalies.sum()):,} of {anomaly_rows_scored:,} scored records fall in the top 5% of anomaly scores."
+            f"{int(anomalies.sum()):,} of {anomaly_rows_scored:,} scored records were flagged by Isolation Forest."
             + ("" if anomaly_rows_scored >= len(data) else " Scoring was capped for runtime; unscored rows are not anomaly-free.")
         )
     if not segment_frame.empty:
@@ -541,6 +790,76 @@ def analyze_dataset(frame: pd.DataFrame, filename: str = "uploaded_data") -> dic
             "No explicit default target was detected. Use anomaly and statistical risk-pattern findings "
             "for review; no predicted risk probability is available."
         )
+    warning_details: list[dict[str, str]] = []
+    if missing_rate >= 0.2:
+        missing_columns = data.isna().mean().sort_values(ascending=False)
+        highest_missing = [
+            f"{column}: {data[column].isna().mean():.1%}"
+            for column in missing_columns.index[:3]
+            if data[column].isna().any()
+        ]
+        warning_details.append({
+            "Severity": "High" if missing_rate >= 0.4 else "Medium",
+            "Evidence": f"{missing_rate:.1%} of all cells are missing; " + ", ".join(highest_missing),
+            "Reason": "High or concentrated missingness can bias summaries and risk signals.",
+            "Recommended action": "Validate source completeness and document missing-value handling before relying on analysis.",
+        })
+    for _, trend in trends.iterrows():
+        change = trend["Change %"]
+        if trend["Direction"] == "Declining" and pd.notna(change):
+            warning_details.append({
+                "Severity": "High" if change <= -20 else "Medium",
+                "Evidence": (
+                    f"{trend['Variable']} changed from {_numeric_value(trend['First value']):,.4g} "
+                    f"to {_numeric_value(trend['Latest value']):,.4g} ({change:.1f}%) "
+                    f"between {trend['From']} and {trend['To']}."
+                ),
+                "Reason": "Observed values declined over the available time periods.",
+                "Recommended action": "Verify period alignment and units, then investigate the underlying operating or reporting change.",
+            })
+    if anomalies.any():
+        anomaly_share = float(anomalies.sum() / max(anomaly_rows_scored, 1))
+        warning_details.append({
+            "Severity": "High" if anomaly_share >= 0.1 else "Medium",
+            "Evidence": (
+                f"Isolation Forest flagged {int(anomalies.sum()):,} of "
+                f"{anomaly_rows_scored:,} scored records ({anomaly_share:.1%})."
+            ),
+            "Reason": "The flagged rows have unusual multivariate patterns relative to this uploaded dataset.",
+            "Recommended action": "Review the flagged rows and verify their source values; unusualness alone is not evidence of default or fraud.",
+        })
+    for column in numeric:
+        name = _key(column)
+        values = pd.to_numeric(data[column], errors="coerce").dropna()
+        if not len(values):
+            continue
+        if any(term in name for term in ("profit", "earnings", "pat", "cash flow", "cashflow")):
+            negative_count = int((values < 0).sum())
+            if negative_count:
+                warning_details.append({
+                    "Severity": "High" if negative_count / len(values) >= 0.25 else "Medium",
+                    "Evidence": f"{negative_count:,} of {len(values):,} observed values in '{column}' are negative.",
+                    "Reason": "Negative profit or operating cash-flow values can indicate financial pressure.",
+                    "Recommended action": "Confirm sign conventions and review the affected periods or records with supporting statements.",
+                })
+        if "current ratio" in name:
+            weak_count = int((values < 1).sum())
+            if weak_count:
+                warning_details.append({
+                    "Severity": "High" if weak_count / len(values) >= 0.25 else "Medium",
+                    "Evidence": f"{weak_count:,} of {len(values):,} observed values in '{column}' are below 1.0.",
+                    "Reason": "Current assets are below current liabilities where this ratio is below 1.",
+                    "Recommended action": "Review near-term liquidity and confirm the ratio's numerator and denominator definitions.",
+                })
+        if "debt to asset" in name or "debt asset ratio" in name:
+            elevated_count = int((values >= 0.65).sum())
+            if elevated_count:
+                warning_details.append({
+                    "Severity": "High" if elevated_count / len(values) >= 0.25 else "Medium",
+                    "Evidence": f"{elevated_count:,} of {len(values):,} observed values in '{column}' are at least 0.65.",
+                    "Reason": "The reported debt-to-asset ratio indicates elevated leverage.",
+                    "Recommended action": "Verify debt and asset scope and review the affected records' repayment capacity.",
+                })
     concentration: list[dict[str, Any]] = []
     exposure_columns = [
         str(column) for column, column_roles in roles.items()
@@ -560,6 +879,7 @@ def analyze_dataset(frame: pd.DataFrame, filename: str = "uploaded_data") -> dic
     enriched["anomaly_score"] = anomaly_scores.to_numpy()
     return {
         "data": enriched,
+        "financial_metrics": _financial_metrics(data),
         "dataset_type": dataset_type,
         "profile": profile,
         "statistics": stats,
@@ -581,9 +901,9 @@ def analyze_dataset(frame: pd.DataFrame, filename: str = "uploaded_data") -> dic
         "anomaly_rows_total": int(len(data)),
         "model": model_result,
         "analysis_mode": "Automatic Dataset Intelligence",
-        "prediction_available": model_result["status"] == "evaluated",
+        "model_evaluation_available": model_result["status"] == "evaluated",
         "analysis_result_title": (
-            "Supervised Risk Prediction" if model_result["status"] == "evaluated"
+            "Supervised Model Evaluation" if model_result["status"] == "evaluated"
             else "Anomaly Analysis" if not target
             else "Risk Pattern Analysis"
         ),
@@ -607,6 +927,7 @@ def analyze_dataset(frame: pd.DataFrame, filename: str = "uploaded_data") -> dic
             [f"{anomalies.sum():,} records have unusual multivariate patterns."]
             if anomalies.any() else []
         ),
+        "warning_details": warning_details,
         "recommendations": recommendations,
         "concentration": pd.DataFrame(concentration),
         "segments": segment_frame,

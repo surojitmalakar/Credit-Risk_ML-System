@@ -7,6 +7,7 @@ from typing import Any
 from xml.sax.saxutils import escape
 
 import pandas as pd
+from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from reportlab.lib import colors
@@ -33,12 +34,36 @@ def _display(value: object) -> str:
     return str(value)
 
 
+def _numeric_mean_profile(analysis: dict[str, Any], limit: int = 8) -> pd.DataFrame:
+    statistics = analysis["statistics"]
+    if statistics.empty or not {"Variable", "mean"} <= set(statistics.columns):
+        return pd.DataFrame(columns=["Variable", "mean"])
+    unique_counts = analysis["profile"].set_index("Variable")["Unique"]
+    means = statistics.loc[:, ["Variable", "mean"]].copy()
+    means["mean"] = pd.to_numeric(means["mean"], errors="coerce")
+    means = means.loc[
+        means["Variable"].map(unique_counts).fillna(0).gt(1)
+        & means["mean"].map(pd.notna)
+    ]
+    return means.head(limit).reset_index(drop=True)
+
+
 def _assessment_table(assessment: dict[str, Any]) -> list[list[str]]:
     probability = assessment.get("distress_probability")
+    risk_index = assessment.get("risk_index")
+    if probability is not None:
+        risk_label = "Model estimate (not necessarily calibrated)"
+        risk_value = f"{probability:.1%}"
+    elif risk_index is not None:
+        risk_label = "Rule-based risk index (0-100 points)"
+        risk_value = f"{risk_index:.1f}/100"
+    else:
+        risk_label = "Risk estimate"
+        risk_value = "Not available"
     return [
         ["Assessment method", str(assessment.get("method", "Existing ML model"))],
         ["Financial health score", _display(assessment.get("health_score"))],
-        ["Risk index / model estimate", f"{probability:.1%}" if probability is not None else "Not available"],
+        [risk_label, risk_value],
         ["Risk category", str(assessment.get("risk_category", "Not available"))],
         ["Data coverage", str(assessment.get("coverage_label", "Not available"))],
     ]
@@ -145,7 +170,10 @@ def create_excel_analysis(
         ).to_excel(writer, sheet_name="Financial Ratios", index=False)
         pd.DataFrame(
             [{"Metric": key.replace("_", " ").title(), "Value": value} for key, value in assessment.items()
-             if key in {"method", "distress_probability", "risk_category", "health_score", "confidence_note", "coverage_label"}]
+             if key in {
+                 "method", "distress_probability", "risk_index", "risk_category",
+                 "health_score", "confidence_note", "coverage_label",
+             }]
         ).to_excel(writer, sheet_name="Risk Assessment", index=False)
         pd.DataFrame({"Early Warning Indicator": warnings}).to_excel(
             writer, sheet_name="Early Warnings", index=False,
@@ -198,6 +226,23 @@ def create_data_intelligence_pdf(analysis: dict[str, Any], filename: str) -> byt
             styles["BodyText"],
         ),
     ]
+    if "financial_metrics" in analysis:
+        story.extend([
+            Paragraph("Financial analysis", styles["Heading3"]),
+            Table(
+                [["Metric", "Observed value", "Calculation basis"]]
+                + [
+                    [
+                        str(row["Metric"]),
+                        _display(row["Value"]),
+                        str(row["Basis"]),
+                    ]
+                    for _, row in analysis["financial_metrics"].iterrows()
+                ],
+                colWidths=[1.25 * inch, 1.65 * inch, 3.95 * inch],
+                repeatRows=1,
+            ),
+        ])
     detected = analysis["profile"].loc[
         analysis["profile"]["Detected meaning"].astype(str).ne(""),
         ["Variable", "Detected meaning"],
@@ -238,7 +283,7 @@ def create_data_intelligence_pdf(analysis: dict[str, Any], filename: str) -> byt
     numeric_profile = analysis["profile"].loc[
         analysis["profile"]["Type"].eq("Numeric"), ["Variable", "Missing %"]
     ].head(8)
-    if not numeric_profile.empty:
+    if not numeric_profile.empty and numeric_profile["Missing %"].gt(0).any():
         chart = VerticalBarChart()
         chart.x = 30
         chart.y = 25
@@ -252,11 +297,35 @@ def create_data_intelligence_pdf(analysis: dict[str, Any], filename: str) -> byt
         drawing = Drawing(500, 180)
         drawing.add(chart)
         story.extend([Spacer(1, 8), Paragraph("Missing values by numeric variable (%)", styles["Heading3"]), drawing])
+    else:
+        numeric_means = _numeric_mean_profile(analysis)
+        if not numeric_means.empty:
+            chart = VerticalBarChart()
+            chart.x = 30
+            chart.y = 25
+            chart.height = 130
+            chart.width = 480
+            means = numeric_means["mean"].astype(float).tolist()
+            chart.data = [means]
+            chart.categoryAxis.categoryNames = numeric_means["Variable"].astype(str).tolist()
+            chart.valueAxis.valueMin = min(0.0, min(means))
+            chart.valueAxis.valueMax = max(0.0, max(means))
+            if chart.valueAxis.valueMin == chart.valueAxis.valueMax:
+                chart.valueAxis.valueMax = chart.valueAxis.valueMin + 1
+            chart.valueAxis.valueStep = (
+                chart.valueAxis.valueMax - chart.valueAxis.valueMin
+            ) / 5
+            drawing = Drawing(500, 180)
+            drawing.add(chart)
+            story.extend([
+                Spacer(1, 8),
+                Paragraph("Observed numeric variable means (source units)", styles["Heading3"]),
+                drawing,
+            ])
     for title, values in (
         ("Key patterns", analysis["findings"]),
-        ("Early warnings", analysis["early_warnings"] or ["No data-derived early warning was triggered."]),
         ("Risk findings and limitations", [
-            "Predicted Risk is available only from a supervised model with an evaluable target. "
+            "Supervised model evaluation is available only when an evaluable target is found. "
             "Anomaly means statistical unusualness; a Risk Indicator is a detected data pattern. "
             "Neither establishes default, fraud, or misconduct.",
             analysis["model"].get(
@@ -270,6 +339,24 @@ def create_data_intelligence_pdf(analysis: dict[str, Any], filename: str) -> byt
     ):
         story.append(Paragraph(title, styles["Heading3"]))
         story.extend(Paragraph(f"- {escape(str(value))}", styles["BodyText"]) for value in values)
+    story.append(Paragraph("Early warnings", styles["Heading3"]))
+    warning_details = analysis.get("warning_details", [])
+    if warning_details:
+        warning_rows = [[
+            Paragraph(label, styles["BodyText"])
+            for label in ("Severity", "Evidence", "Reason", "Recommended action")
+        ]]
+        warning_rows.extend([[
+            Paragraph(escape(str(item.get(key, ""))), styles["BodyText"])
+            for key in ("Severity", "Evidence", "Reason", "Recommended action")
+        ]
+            for item in warning_details[:30]
+        ])
+        warning_table = Table(warning_rows, repeatRows=1)
+        _style_table(warning_table, [0.65 * inch, 2.0 * inch, 1.75 * inch, 2.5 * inch])
+        story.append(warning_table)
+    else:
+        story.append(Paragraph("No data-derived early warning was triggered.", styles["BodyText"]))
     if not analysis["correlations"].empty:
         story.extend([Paragraph("Strongest numeric associations", styles["Heading3"])])
         rows = [["Variable A", "Variable B", "Absolute correlation"]]
@@ -318,9 +405,9 @@ def create_data_intelligence_excel(analysis: dict[str, Any]) -> bytes:
     output = BytesIO()
     model = analysis["model"]
     model_rows = []
-    if analysis["prediction_available"]:
+    if analysis["model_evaluation_available"]:
         model_rows.extend([
-            {"Metric": "Analysis type", "Value": "Supervised Risk Prediction"},
+            {"Metric": "Analysis type", "Value": "Supervised Model Evaluation"},
             {"Metric": "Target", "Value": model["target"]},
             {"Metric": "Model", "Value": model["model"]},
             {"Metric": "Training records", "Value": model["train_rows"]},
@@ -367,6 +454,8 @@ def create_data_intelligence_excel(analysis: dict[str, Any]) -> bytes:
             {"Metric": "Processed rows included in workbook", "Value": min(len(analysis["data"]), 50_000)},
         ]).to_excel(writer, sheet_name="Overview", index=False)
         analysis["data"].head(50_000).to_excel(writer, sheet_name="Processed Data", index=False)
+        if "financial_metrics" in analysis:
+            analysis["financial_metrics"].to_excel(writer, sheet_name="Financial Analysis", index=False)
         analysis["profile"].to_excel(writer, sheet_name="Data Profile", index=False)
         analysis["statistics"].to_excel(writer, sheet_name="Statistics", index=False)
         analysis["categorical_summary"].to_excel(writer, sheet_name="Categorical Summary", index=False)
@@ -378,9 +467,35 @@ def create_data_intelligence_excel(analysis: dict[str, Any]) -> bytes:
         analysis["target_distribution"].to_excel(writer, sheet_name="Target Distribution", index=False)
         pd.DataFrame(model_rows).to_excel(writer, sheet_name="Model Results", index=False)
         pd.DataFrame({"Finding": analysis["findings"]}).to_excel(writer, sheet_name="Key Findings", index=False)
-        pd.DataFrame({"Early Warning": analysis["early_warnings"]}).to_excel(writer, sheet_name="Early Warnings", index=False)
+        warning_details = analysis.get("warning_details", [])
+        if warning_details:
+            pd.DataFrame(warning_details).to_excel(writer, sheet_name="Early Warnings", index=False)
+        else:
+            pd.DataFrame({"Early Warning": analysis["early_warnings"]}).to_excel(
+                writer, sheet_name="Early Warnings", index=False,
+            )
         pd.DataFrame({"Recommendation": analysis["recommendations"]}).to_excel(writer, sheet_name="Recommendations", index=False)
         workbook = writer.book
+        numeric_means = _numeric_mean_profile(analysis)
+        if not numeric_means.empty:
+            numeric_means.to_excel(writer, sheet_name="Charts", index=False)
+            chart_sheet = writer.sheets["Charts"]
+            chart = BarChart()
+            chart.type = "bar"
+            chart.style = 10
+            chart.title = "Observed numeric variable means"
+            chart.y_axis.title = "Variable"
+            chart.x_axis.title = "Mean (source units)"
+            chart.add_data(
+                Reference(chart_sheet, min_col=2, min_row=1, max_row=len(numeric_means) + 1),
+                titles_from_data=True,
+            )
+            chart.set_categories(
+                Reference(chart_sheet, min_col=1, min_row=2, max_row=len(numeric_means) + 1)
+            )
+            chart.height = 7
+            chart.width = 15
+            chart_sheet.add_chart(chart, "D2")
         header_fill = PatternFill("solid", fgColor="0D1B2A")
         header_font = Font(bold=True, color="FFFFFF")
         for worksheet in workbook.worksheets:
@@ -442,9 +557,9 @@ def create_screening_pdf(
         Paragraph(escape(f"Source: {filename}"), styles["Normal"]),
         Spacer(1, 0.18 * inch),
         Paragraph(
-            "Screening scores are research estimates produced by an existing statistical model "
-            "or, for records with too few observed fields, a transparent rule-based index. "
-            "They are not lending decisions and carry no calibration guarantee.",
+            "Each screening score is a transparent 0-100 weighted rule-based index calculated "
+            "from observed fields in the uploaded dataset. It is not a model prediction or "
+            "probability of default and is not a lending decision.",
             styles["Normal"],
         ),
         Spacer(1, 0.2 * inch),
@@ -454,10 +569,9 @@ def create_screening_pdf(
         [band, f"{count:,}"] for band, count in (summary.get("bands") or {}).items()
     )
     summary_rows.extend([
-        ["ML model scored", f"{summary.get('model_records', 0):,}"],
         ["Rule-based index", f"{summary.get('rule_records', 0):,}"],
         ["Records with warning signals", f"{summary.get('flagged_records', 0):,}"],
-        ["Mean risk estimate", _display(summary.get("mean_probability"))],
+        ["Mean rule risk index (0-100)", _display(summary.get("mean_risk_index"))],
     ])
     story.append(Paragraph("Screening summary", styles["Heading2"]))
     summary_cells = [
@@ -474,23 +588,23 @@ def create_screening_pdf(
         story.append(_style_table(Table(exposure_rows, repeatRows=1)))
         story.append(Spacer(1, 0.22 * inch))
 
-    ordered = scores.sort_values("Distress probability", ascending=False)
+    ordered = scores.sort_values("Risk index (0-100)", ascending=False)
     story.append(Paragraph(
-        f"Highest estimated risk records (up to {max_rows} of {len(ordered):,})", styles["Heading2"],
+        f"Highest rule risk index records (up to {max_rows} of {len(ordered):,})", styles["Heading2"],
     ))
     listed = [
-        "Record", "Company", "Period", "Risk category", "Distress probability",
+        "Record", "Company", "Period", "Risk category", "Risk index (0-100)",
         "Health score", "Method", "Warning signals",
     ]
     rows = [listed]
     for record in ordered.head(max_rows).itertuples(index=False):
-        probability = record._asdict().get("Distress probability")
+        risk_index = record._asdict().get("Risk index (0-100)")
         rows.append([
             _display(record._asdict().get("Record")),
             _display(record._asdict().get("Company", "Not identified")),
             _display(record._asdict().get("Period", "Not identified")),
             str(record._asdict().get("Risk category")),
-            "Not available" if pd.isna(probability) else f"{float(probability):.1%}",
+            "Not available" if pd.isna(risk_index) else f"{float(risk_index):.1f}",
             _display(record._asdict().get("Health score")),
             str(record._asdict().get("Method")),
             _display(record._asdict().get("Warning signals")),
@@ -504,7 +618,7 @@ def create_screening_pdf(
     story.append(table)
     story.append(Spacer(1, 0.2 * inch))
     story.append(Paragraph(
-        "Records shown are sorted by the model's own estimate. Review underlying statements, "
+        "Records shown are sorted by the rule-based index. Review underlying statements, "
         "data coverage, and early-warning signals before drawing any conclusion.",
         styles["Italic"],
     ))
@@ -524,16 +638,15 @@ def create_screening_excel(
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         pd.DataFrame([
             {"Metric": "Records screened", "Value": summary.get("records", 0)},
-            {"Metric": "ML model scored", "Value": summary.get("model_records", 0)},
             {"Metric": "Rule-based index", "Value": summary.get("rule_records", 0)},
             {"Metric": "Insufficient data", "Value": summary.get("insufficient_records", 0)},
             {"Metric": "Records with warning signals", "Value": summary.get("flagged_records", 0)},
-            {"Metric": "Mean risk estimate", "Value": summary.get("mean_probability")},
-            {"Metric": "Median risk estimate", "Value": summary.get("median_probability")},
-            {"Metric": "Elevated records (>=60%)", "Value": summary.get("elevated_records", 0)},
+            {"Metric": "Mean rule risk index (0-100)", "Value": summary.get("mean_risk_index")},
+            {"Metric": "Median rule risk index (0-100)", "Value": summary.get("median_risk_index")},
+            {"Metric": "Elevated records (index >=60)", "Value": summary.get("elevated_records", 0)},
             {"Metric": "Interpretation", "Value": (
-                "Screening scores are research estimates, not lending decisions. Records scored by "
-                "the rule-based index are heuristics rather than calibrated probabilities."
+                "Screening scores are transparent rule-based indices (0-100), not model predictions "
+                "or calibrated probabilities of default."
             )},
         ]).to_excel(writer, sheet_name="Overview", index=False)
         pd.DataFrame([
@@ -544,7 +657,7 @@ def create_screening_excel(
             exposure.to_excel(writer, sheet_name="Exposure", index=False)
         if notes is not None and not notes.empty:
             notes.to_excel(writer, sheet_name="Analyst Notes", index=False)
-        ordered = scores.sort_values("Distress probability", ascending=False)
+        ordered = scores.sort_values("Risk index (0-100)", ascending=False)
         ordered.head(max_rows).to_excel(writer, sheet_name="Screening", index=False)
         for sheet in writer.book.worksheets:
             for column_cells in sheet.columns:

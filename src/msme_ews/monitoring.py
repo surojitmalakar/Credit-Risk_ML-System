@@ -154,17 +154,17 @@ def drift_report(
 
 
 def prediction_stability(scores_history: list[pd.Series]) -> pd.DataFrame:
-    """Track the screened risk distribution across successive revisions."""
+    """Track the 0-100 rule-index distribution across successive revisions."""
     rows: list[dict[str, Any]] = []
     for position, scores in enumerate(scores_history, start=1):
         values = pd.to_numeric(pd.Series(scores), errors="coerce").dropna()
         rows.append({
             "Revision": position,
             "Scored records": int(len(values)),
-            "Mean risk": None if values.empty else round(float(values.mean()), 4),
-            "Median risk": None if values.empty else round(float(values.median()), 4),
-            "Elevated (>=60%)": int((values >= 0.60).sum()),
-            "Elevated share": None if values.empty else round(float((values >= 0.60).mean()), 4),
+            "Mean risk index": None if values.empty else round(float(values.mean()), 1),
+            "Median risk index": None if values.empty else round(float(values.median()), 1),
+            "Elevated (index >=60)": int((values >= 60).sum()),
+            "Elevated share": None if values.empty else round(float((values >= 60).mean()), 4),
         })
     return pd.DataFrame(rows)
 

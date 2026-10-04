@@ -4,6 +4,7 @@ import io
 import zipfile
 
 import pandas as pd
+from openpyxl import load_workbook
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
@@ -43,8 +44,8 @@ def test_customer_master_is_automatically_profiled_and_evaluated():
     assert not analysis["high_risk_groups"].empty
     assert not analysis["trends"].empty
     assert any("association" in finding for finding in analysis["findings"])
-    assert analysis["prediction_available"] is True
-    assert analysis["analysis_result_title"] == "Supervised Risk Prediction"
+    assert analysis["model_evaluation_available"] is True
+    assert analysis["analysis_result_title"] == "Supervised Model Evaluation"
 
 
 def test_unfamiliar_numeric_and_categorical_columns_are_not_rejected():
@@ -61,11 +62,62 @@ def test_unfamiliar_numeric_and_categorical_columns_are_not_rejected():
     assert len(analysis["correlations"]) == 1
     assert analysis["data_quality_percent"] == 100
     assert "No explicit default target was found." in analysis["executive_summary"]
-    assert analysis["prediction_available"] is False
+    assert analysis["model_evaluation_available"] is False
     assert analysis["analysis_result_title"] == "Anomaly Analysis"
     assert analysis["alternative_analysis"] == "Anomaly + Statistical Risk Pattern Detection"
     assert analysis["risk_prediction_summary"] == "Not available without a target."
     assert "No explicit default target was found. Anomaly and risk-pattern analysis was performed instead." in analysis["executive_summary"]
+
+
+def test_indian_currency_units_and_year_periods_drive_financial_metrics():
+    source = pd.DataFrame({
+        "Financial Year": [2022, 2023, 2024],
+        "Annual Sales": ["₹1,00,000", "Rs. 2 Lakhs", "3 Lakhs"],
+        "PAT": ["₹10,000", "Rs. 20,000", "₹30,000"],
+        "Total Assets": ["5 Lakhs", "6 Lakhs", "7 Lakhs"],
+        "Total Liabilities": ["2 Lakhs", "2 Lakhs", "2 Lakhs"],
+        "Cash Balance": ["1 Thousand", "2 Thousand", "3 Crores"],
+    })
+
+    analysis = analyze_dataset(source, "financials.csv")
+    metrics = analysis["financial_metrics"].set_index("Metric")
+
+    assert analysis["date_columns"] == ["Financial Year"]
+    assert analysis["numeric_columns"] == [
+        "Annual Sales", "PAT", "Total Assets", "Total Liabilities", "Cash Balance"
+    ]
+    assert analysis["data"]["Cash Balance"].iloc[-1] == 30_000_000
+    assert metrics.loc["Revenue", "Value"] == 200_000
+    assert metrics.loc["Revenue growth", "Value"] == 0.75
+    assert metrics.loc["Net profit", "Value"] == 20_000
+    assert metrics.loc["Profit margin", "Value"] == 0.1
+
+
+def test_generic_customer_status_is_not_assumed_to_be_a_risk_target():
+    source = pd.DataFrame({
+        "customer_status": ["Active", "Inactive"] * 20,
+        "age": list(range(20, 60)),
+        "monthly_spend": list(range(100, 500, 10)),
+    })
+
+    analysis = analyze_dataset(source, "customers.csv")
+
+    assert analysis["targets"] == []
+    assert analysis["model"]["status"] == "not trained"
+
+
+def test_numeric_target_is_evaluated_as_regression():
+    source = pd.DataFrame({
+        "driver": range(60),
+        "target": [float(index * 1.75 + (index % 3)) for index in range(60)],
+    })
+
+    analysis = analyze_dataset(source, "outcomes.csv")
+
+    assert analysis["targets"] == ["target"]
+    assert analysis["model"]["status"] == "evaluated"
+    assert analysis["model"]["model"] == "RandomForestRegressor"
+    assert "mae" in analysis["model"]
 
 
 def test_nonfinancial_pdf_text_remains_available_for_general_profiling():
@@ -114,6 +166,9 @@ def test_data_intelligence_reports_include_actual_profile_and_findings():
         assert b"Risk Results" in workbook_xml
         assert b"Processed Data" in workbook_xml
         assert b"Trends" in workbook_xml
+    excel = load_workbook(io.BytesIO(workbook), read_only=False)
+    assert "Charts" in excel.sheetnames
+    assert len(excel["Charts"]._charts) == 1
 
 
 def test_no_target_excel_report_uses_user_facing_analysis_labels():

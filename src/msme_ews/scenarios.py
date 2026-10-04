@@ -211,34 +211,21 @@ def score_grid(
     bundle: dict[str, Any] | None,
     scorer: Callable[[pd.DataFrame], float | None] | None = None,
 ) -> pd.Series:
-    """Score every grid row with the model, falling back to the rule index."""
-    if scorer is not None:
-        values = scorer(grid)
-        if values is not None:
-            return pd.Series(values, index=grid.index, dtype="float64")
-    required = list(bundle.get("features", [])) if bundle else []
-    if bundle is not None and required and all(name in grid.columns for name in required):
-        features = engineer_features(grid)
-        if all(name in features.columns for name in required):
-            try:
-                probabilities = bundle["model"].predict_proba(features[required])
-                if probabilities.ndim == 2 and probabilities.shape[1] >= 2:
-                    return pd.Series(probabilities[:, 1], index=grid.index, dtype="float64")
-            except (ValueError, TypeError, KeyError):
-                pass
+    """Return a transparent rule-based risk index in points, never a probability."""
+    del bundle, scorer
     return rule_based_risk_index(grid, engineer_features(grid))["Rule risk index"].astype("float64")
 
 
-def band_of(probability: float | None, bands: Sequence[float] = DEFAULT_BANDS) -> str:
-    """Band a probability using adjustable cutoffs."""
-    if probability is None or pd.isna(probability):
+def band_of(risk_index: float | None, bands: Sequence[float] = DEFAULT_BANDS) -> str:
+    """Band a 0-100 rule index using cutoffs expressed as fractions."""
+    if risk_index is None or pd.isna(risk_index):
         return "Insufficient Data"
-    moderate, high, critical = bands
-    if probability >= critical:
+    moderate, high, critical = (cutoff * 100 for cutoff in bands)
+    if risk_index >= critical:
         return "Critical Risk"
-    if probability >= high:
+    if risk_index >= high:
         return "High Risk"
-    if probability >= moderate:
+    if risk_index >= moderate:
         return "Moderate Risk"
     return "Low Risk"
 
@@ -251,21 +238,21 @@ def run_stress_grid(
     steps: dict[str, Iterable[float]] | None = None,
 ) -> pd.DataFrame:
     """Score a full multi-factor grid in one pass."""
-    base_probability = float(score_grid(base_row, bundle).iloc[0])
+    base_risk_index = float(score_grid(base_row, bundle).iloc[0])
     grid, specs = build_grid(base_row, factors, steps)
-    probabilities = score_grid(grid, bundle)
+    risk_indices = score_grid(grid, bundle)
     results = pd.DataFrame({
         "Scenario": [scenario_label(spec) for spec in specs],
-        "Distress probability": probabilities.round(4),
-        "Risk category": [band_of(value, bands) for value in probabilities],
-        "Change vs reported": (probabilities - base_probability).round(4),
+        "Risk index (0-100)": risk_indices.round(1),
+        "Risk category": [band_of(value, bands) for value in risk_indices],
+        "Change vs baseline (points)": (risk_indices - base_risk_index).round(1),
     })
     for factor in factors:
         results[factor.label] = [
             spec.get(factor.key, 0.0) for spec in specs
         ]
-    results.attrs["base_probability"] = base_probability
-    results.attrs["base_category"] = band_of(base_probability, bands)
+    results.attrs["base_risk_index"] = base_risk_index
+    results.attrs["base_category"] = band_of(base_risk_index, bands)
     return results
 
 
@@ -276,7 +263,7 @@ def tornado_rows(
     bands: Sequence[float] = DEFAULT_BANDS,
 ) -> pd.DataFrame:
     """Single-factor sensitivity of the risk estimate, sorted by total impact."""
-    base_probability = float(score_grid(base_row, bundle).iloc[0])
+    base_risk_index = float(score_grid(base_row, bundle).iloc[0])
     levels = [(factor, factor.steps[0], factor.steps[-1]) for factor in factors]
     if not levels:
         return pd.DataFrame()
@@ -288,17 +275,17 @@ def tornado_rows(
         column[2 * position + 1] = factor.shock(upside)
         shocks[factor.key] = column
     probe = apply_stress(pd.concat([base_row] * (2 * len(levels)), ignore_index=True), shocks)
-    probabilities = score_grid(probe, bundle).to_numpy()
+    risk_indices = score_grid(probe, bundle).to_numpy()
     rows = []
     for position, (factor, downside, upside) in enumerate(levels):
-        down_value = float(probabilities[2 * position])
-        up_value = float(probabilities[2 * position + 1])
+        down_value = float(risk_indices[2 * position])
+        up_value = float(risk_indices[2 * position + 1])
         rows.append({
             "Factor": factor.label,
             f"Downside {factor.format_step(downside)}": down_value,
             f"Upside {factor.format_step(upside)}": up_value,
-            "Downside impact": down_value - base_probability,
-            "Upside impact": up_value - base_probability,
+            "Downside impact": down_value - base_risk_index,
+            "Upside impact": up_value - base_risk_index,
             "Worst band": band_of(max(down_value, up_value), bands),
             "Best band": band_of(min(down_value, up_value), bands),
         })
@@ -307,23 +294,23 @@ def tornado_rows(
     return frame.sort_values("Total impact", ascending=False).reset_index(drop=True)
 
 
-def summarize_stress(results: pd.DataFrame, base_probability: float) -> dict[str, Any]:
+def summarize_stress(results: pd.DataFrame, base_risk_index: float) -> dict[str, Any]:
     """Headline figures for the stress-test header."""
     if results.empty:
-        return {"scenarios": 0, "worst_probability": None, "best_probability": None, "elevated": 0}
-    probability = results["Distress probability"]
-    worst_index = probability.idxmax()
-    best_index = probability.idxmin()
+        return {"scenarios": 0, "worst_risk_index": None, "best_risk_index": None, "elevated": 0}
+    risk_index = results["Risk index (0-100)"]
+    worst_index = risk_index.idxmax()
+    best_index = risk_index.idxmin()
     return {
         "scenarios": int(len(results)),
-        "worst_probability": float(probability.max()),
-        "best_probability": float(probability.min()),
+        "worst_risk_index": float(risk_index.max()),
+        "best_risk_index": float(risk_index.min()),
         "worst_scenario": str(results.loc[worst_index, "Scenario"]),
         "best_scenario": str(results.loc[best_index, "Scenario"]),
-        "worst_band": band_of(float(probability.max())),
-        "mean_change": float((probability - base_probability).mean()),
-        "elevated": int((probability >= 0.60).sum()),
-        "worse_than_reported": int((probability > base_probability + 1e-9).sum()),
+        "worst_band": band_of(float(risk_index.max())),
+        "mean_change": float((risk_index - base_risk_index).mean()),
+        "elevated": int((risk_index >= 60).sum()),
+        "worse_than_reported": int((risk_index > base_risk_index + 1e-9).sum()),
     }
 
 
@@ -352,14 +339,14 @@ def breakeven_step(
         pd.concat([base_row] * len(candidates), ignore_index=True),
         {factor.key: np.asarray(shocks, dtype="float64")},
     )
-    probabilities = score_grid(probe, bundle).to_numpy()
+    risk_indices = score_grid(probe, bundle).to_numpy()
     safe = [
-        step for step, probability in zip(candidates, probabilities, strict=True)
-        if probability < target
+        step for step, risk_index in zip(candidates, risk_indices, strict=True)
+        if risk_index < target * 100
     ]
     return max(safe, key=abs) if safe else None
 
 
-def category(probability: float | None) -> str:
+def category(risk_index: float | None) -> str:
     """Re-export the band helper used by the app for readable summaries."""
-    return risk_category(probability) if probability is not None else "Insufficient Data"
+    return band_of(risk_index) if risk_index is not None else "Insufficient Data"

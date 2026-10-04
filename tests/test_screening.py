@@ -15,7 +15,7 @@ from msme_ews.financial_analysis import (
     rule_based_assessment,
     rule_based_risk_index,
 )
-from msme_ews.prediction import DEFAULT_MODEL_PATH, load_model_bundle, predict_financial_health
+from msme_ews.prediction import DEFAULT_MODEL_PATH, load_model_bundle
 from msme_ews.screening import (
     banded_exposure,
     detect_exposure_column,
@@ -75,7 +75,7 @@ def test_vectorized_rule_index_matches_the_scalar_index_exactly():
     for row_index in range(len(frame)):
         scalar = rule_based_assessment(frame, row_index, analyze_financials(frame, row_index, features))
         compared += 1
-        expected = scalar["distress_probability"]
+        expected = scalar["risk_index"]
         actual = vectorized["Rule risk index"].iloc[row_index]
         if expected is None:
             assert pd.isna(actual)
@@ -91,21 +91,22 @@ def test_vectorized_rule_index_matches_the_scalar_index_exactly():
     assert compared == len(frame)
 
 
-def test_batch_scores_match_single_record_predictions():
+def test_batch_scores_match_single_record_rule_indices():
     frame = make_demo_data()
     features = engineer_features(frame)
     bundle = load_model_bundle(DEFAULT_MODEL_PATH)
     scores = score_records(frame, features, early_warning_indicators(frame), bundle)
     for row_index in range(0, len(frame), 13):
-        single = predict_financial_health(
-            frame.iloc[[row_index]],
-            bundle=bundle,
-            include_explanations=False,
-            features=features.iloc[[row_index]],
+        single = rule_based_assessment(
+            frame,
+            row_index,
+            analyze_financials(frame, row_index, features),
         )
-        assert float(scores["Distress probability"].iloc[row_index]) == round4(
-            single["distress_probability"]
-        )
+        batch_index = scores["Risk index (0-100)"].iloc[row_index]
+        if single["risk_index"] is None:
+            assert pd.isna(batch_index)
+        else:
+            assert float(batch_index) == round4(single["risk_index"])
 
 
 def test_model_eligibility_is_vectorized_equivalent():
@@ -124,10 +125,9 @@ def test_score_records_reports_both_methods_and_keeps_positions():
 
     assert len(scores) == len(frame)
     assert scores["_position"].tolist() == list(range(len(frame)))
-    assert set(scores["Method"]) <= {"Existing ML model", "Rule-based risk index", "Insufficient data"}
-    assert (scores["Method"] == "Existing ML model").any()
+    assert set(scores["Method"]) <= {"Rule-based risk index", "Insufficient data"}
+    assert not scores["ML model used"].any()
     assert (scores["Method"] == "Rule-based risk index").any()
-    assert (scores["ML model used"] == (scores["Method"] == "Existing ML model")).all()
     assert scores["Health score"].dropna().between(0, 100).all()
     assert scores["Coverage %"].between(0, 100).all()
 
@@ -143,7 +143,7 @@ def test_screening_summary_aggregates_bands_and_coverage():
     assert sum(summary["bands"].values()) == len(frame)
     assert summary["model_records"] == int(scores["ML model used"].sum())
     assert summary["flagged_records"] == int((scores["Warning signals"] > 0).sum())
-    assert 0 <= summary["mean_probability"] <= 1
+    assert 0 <= summary["mean_risk_index"] <= 100
 
 
 def test_screening_works_without_a_model_bundle():
@@ -178,10 +178,10 @@ def test_record_snapshot_matches_the_selected_record_assessment():
         snapshot = record_snapshot(frame, row_index, features, flags, bundle)
         assert snapshot["row_index"] == row_index
         assert snapshot["risk_category"] == scores["Risk category"].iloc[row_index]
-        batch_probability = scores["Distress probability"].iloc[row_index]
-        if snapshot["distress_probability"] is None:
-            assert pd.isna(batch_probability)
+        batch_index = scores["Risk index (0-100)"].iloc[row_index]
+        if snapshot["risk_index"] is None:
+            assert pd.isna(batch_index)
         else:
-            assert snapshot["distress_probability"] == round4(batch_probability)
+            assert snapshot["risk_index"] == round4(batch_index)
         assert snapshot["method"] == scores["Method"].iloc[row_index]
         assert snapshot["coverage_label"].endswith("%)")

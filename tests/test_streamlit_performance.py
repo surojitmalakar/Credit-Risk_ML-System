@@ -19,6 +19,14 @@ def _financial_csv(rows: int = 120) -> bytes:
     return "\n".join(lines).encode("utf-8")
 
 
+def test_empty_application_requests_uploaded_data():
+    app = AppTest.from_file(APP).run(timeout=30)
+
+    assert not app.exception
+    assert any(info.value == "Upload a dataset to generate analysis." for info in app.info)
+    assert not app.metric
+
+
 def test_upload_is_analyzed_on_request_and_charts_are_lazy():
     app = AppTest.from_file(Path(__file__).parents[1] / "app.py").run(timeout=30)
     csv = (
@@ -99,7 +107,7 @@ def test_screening_page_scores_every_uploaded_record():
     screened = {metric.label: metric.value for metric in app.metric}
     assert screened["Records screened"] == screened["Records"]
     assert int(screened["Records screened"].replace(",", "")) == 120 or screened["Records"] == "60"
-    assert screened["ML model scored"] == screened["Records screened"]
+    assert screened["Rule-based index"] == screened["Records screened"]
     assert len(app.get("plotly_chart")) >= 1
     table = next(frame for frame in app.dataframe if "Risk category" in str(frame.value.columns))
     assert len(table.value) <= 25
@@ -152,6 +160,10 @@ def test_comparison_page_renders_side_by_side_ratio_views():
 
 def test_copilot_records_conversation_history_and_presets():
     app = AppTest.from_file(APP).run(timeout=60)
+    app.get("file_uploader")[0].upload(
+        "portfolio.csv", _financial_csv(), "text/csv"
+    ).run(timeout=120)
+    app.button[0].click().run(timeout=180)
     app.radio[0].set_value("AI Copilot").run(timeout=120)
 
     assert not app.exception
@@ -187,10 +199,13 @@ def test_monitoring_page_compares_analysis_revisions():
     app.radio[0].set_value("Monitoring").run(timeout=180)
 
     assert not app.exception
-    drift = next(frame for frame in app.dataframe if "Metric" in frame.value.columns)
-    metrics = [str(value) for value in drift.value["Metric"]]
+    drift = next(
+        frame.value for frame in app.dataframe
+        if {"Metric", "Baseline", "Current"} <= set(frame.value.columns)
+    )
+    metrics = [str(value) for value in drift["Metric"]]
     assert any(metric.startswith("PSI") for metric in metrics)
-    assert set(drift.value["Status"]) <= {
+    assert set(drift["Status"]) <= {
         "Stable", "Watch", "Significant shift", "Not comparable", ""
     }
 

@@ -121,8 +121,8 @@ def test_rule_based_context_never_claims_a_calibrated_probability():
     context["assessment_method"] = "Transparent rule-based risk index"
     context["default_probability"] = None
     answer = generate_credit_copilot_response("summarize the financial health", context)
-    assert "not enough numeric data" in answer.lower()
-    assert "heuristic" in answer.lower()
+    assert "rule-based risk index" in answer.lower()
+    assert "not a calibrated probability" in answer.lower()
 
 
 def test_context_exposes_coverage_and_prior_period():

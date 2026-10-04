@@ -174,14 +174,25 @@ def rule_based_assessment(
         protective.append("Operating Cash Flow")
 
     observed_fields = analysis["available_fields"]
-    if len(observed_fields) < 2:
-        probability = None
-    else:
-        probability = min(0.95, max(0.05, 0.10 + sum(weight for _, weight in observed) - min(0.20, len(protective) * 0.04)))
+    risk_index = None
+    if len(observed_fields) >= 2:
+        risk_index = 100 * min(
+            1.0,
+            max(
+                0.0,
+                sum(weight for _, weight in observed)
+                - min(0.20, len(protective) * 0.04),
+            ),
+        )
 
-    category = risk_category(probability) if probability is not None else "Insufficient Data"
+    category = (
+        risk_category(risk_index / 100)
+        if risk_index is not None
+        else "Insufficient Data"
+    )
     return {
-        "distress_probability": probability,
+        "distress_probability": None,
+        "risk_index": risk_index,
         "risk_category": category,
         "confidence_indicator": analysis["coverage_percent"] / 100,
         "confidence_note": f"Data coverage: {analysis['coverage_count']} of {analysis['coverage_total']} core financial fields; this is not statistical confidence.",
@@ -198,7 +209,7 @@ def rule_based_assessment(
             {"feature": feature}
             for feature in dict.fromkeys(protective)
         ],
-        "method": "Transparent rule-based risk index; not a calibrated probability of default.",
+        "method": "Transparent weighted rule-based risk index (0-100 points), not a probability of default.",
     }
 
 
@@ -311,10 +322,15 @@ def rule_based_risk_index(frame: pd.DataFrame, features: pd.DataFrame) -> pd.Dat
     risk_factor_count = risk_flags.sum(axis=1).astype("int64")
     observed_fields = observed_field_counts(frame)
 
-    probability = (0.10 + risk_score - np.minimum(0.20, protective_count * 0.04)).clip(0.05, 0.95)
-    probability = probability.where(observed_fields >= 2)
-    category = probability.map(
-        lambda value: "Insufficient Data" if pd.isna(value) else risk_category(float(value))
+    risk_index = (
+        100 * (risk_score - np.minimum(0.20, protective_count * 0.04)).clip(0.0, 1.0)
+    ).where(observed_fields >= 2)
+    category = risk_index.map(
+        lambda value: (
+            "Insufficient Data"
+            if pd.isna(value)
+            else risk_category(float(value) / 100)
+        )
     )
 
     labels = risk_flags.apply(
@@ -322,7 +338,7 @@ def rule_based_risk_index(frame: pd.DataFrame, features: pd.DataFrame) -> pd.Dat
         axis=1,
     )
     return pd.DataFrame({
-        "Rule risk index": probability,
+        "Rule risk index": risk_index,
         "Rule risk category": category.astype("string"),
         "Rule risk score": risk_score.round(4),
         "Rule risk factors": risk_factor_count,

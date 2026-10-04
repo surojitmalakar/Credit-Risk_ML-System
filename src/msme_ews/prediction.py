@@ -43,6 +43,10 @@ def predict_financial_health(financial_data: dict[str, Any] | pd.DataFrame,
         raise ValueError("Prediction accepts exactly one company-period at a time.")
     if bundle is None:
         bundle = load_model_bundle()
+    if bundle.get("is_demo") is True:
+        raise ValueError(
+            "The configured model was trained on synthetic demo data and cannot be used for production predictions."
+        )
     if features is None:
         features = engineer_features(data)
     elif len(features) != 1:

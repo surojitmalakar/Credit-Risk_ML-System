@@ -44,16 +44,17 @@ def build_credit_context(
     feat = selected_features.iloc[0].copy()
     active_flags = list(flags.iloc[row_index][flags.iloc[row_index]].index)
     company_id = row.get("company_id", "Selected company")
-    revenue = float(feat.get("Revenue", 0.0) or 0.0)
-    profit = float(feat.get("Net_Profit", 0.0) or 0.0)
-    current_ratio = (
-        float(feat.get("Current_Ratio", float("nan")))
-        if pd.notna(feat.get("Current_Ratio")) else float("nan")
-    )
-    leverage = float(feat.get("Debt_to_Assets", 0.0) or 0.0)
-    margin = float(feat.get("EBITDA_Margin", 0.0) or 0.0)
-    coverage = float(feat.get("Interest_Coverage", 0.0) or 0.0)
-    cash_flow = float(feat.get("Cash_Flow_Operations", 0.0) or 0.0)
+    def observed_number(name: str) -> float | None:
+        value = pd.to_numeric(pd.Series([feat.get(name)]), errors="coerce").iloc[0]
+        return float(value) if pd.notna(value) else None
+
+    revenue = observed_number("Revenue")
+    profit = observed_number("Net_Profit")
+    current_ratio = observed_number("Current_Ratio")
+    leverage = observed_number("Debt_to_Assets")
+    margin = observed_number("EBITDA_Margin")
+    coverage = observed_number("Interest_Coverage")
+    cash_flow = observed_number("Cash_Flow_Operations")
     probability = result.get("distress_probability")
     health_score = result.get("health_score")
     history_available = bool("company_id" in frame.columns and "period" in frame.columns)
@@ -61,6 +62,7 @@ def build_credit_context(
         "company": company_id,
         "period": row.get("period", "latest identified period"),
         "revenue": revenue,
+        "revenue_growth": observed_number("Sales_Growth"),
         "profit": profit,
         "current_ratio": current_ratio,
         "debt_to_assets": leverage,
@@ -68,6 +70,7 @@ def build_credit_context(
         "interest_coverage": coverage,
         "cash_flow_operations": cash_flow,
         "default_probability": float(probability) if probability is not None else None,
+        "risk_index": result.get("risk_index"),
         "health_score": health_score,
         "risk_category": result["risk_category"],
         "assessment_method": result.get("method", "Existing ML model"),
@@ -155,10 +158,9 @@ def _reliability_answer(context: dict[str, Any]) -> str:
     )
     if method != "Existing ML model":
         return (
-            f"{base} Because the observed fields are not sufficient for the existing ML model, "
-            "this record was assessed with transparent financial rules, which is a heuristic "
-            "risk index rather than a calibrated probability of default. Supply more periods and "
-            "balance-sheet fields before relying on it."
+            f"{base} No dataset-specific ML model is applied to this upload. The displayed score "
+            "is a transparent heuristic rule-based index, not a calibrated probability of default. "
+            "Supervised hold-out metrics are available only when a usable target is present."
         )
     return (
         f"{base} The score is the model's own output, and the confidence figure shown on the "
@@ -197,10 +199,17 @@ def _comparison_answer(context: dict[str, Any]) -> str:
         if revenue_change is not None
         else " A revenue change could not be calculated from the available rows."
     )
+    risk_index = context.get("risk_index")
+    risk_text = (
+        f"{risk_index:.1f}/100 rule index"
+        if risk_index is not None
+        else "no calculable risk index"
+    )
     return (
         f"The previous recorded period is {prior['period']}.{movement} "
-        f"The current assessment is {context['risk_category']} with a "
-        f"{_probability_text(context)} distress estimate, and the active early-warning signals are "
+        f"The current assessment is {context['risk_category']} with "
+        f"{risk_text}, "
+        "and the active early-warning signals are "
         f"{', '.join(context['warnings']) if context['warnings'] else 'none'}. "
         "Period-over-period movement in leverage, liquidity, and margins is the more reliable "
         "signal than a single-period snapshot."
@@ -208,6 +217,31 @@ def _comparison_answer(context: dict[str, Any]) -> str:
 
 
 def _sensitivity_answer(context: dict[str, Any]) -> str:
+    if context.get("assessment_method") != "Existing ML model":
+        leverage = context.get("debt_to_assets")
+        liquidity = context.get("current_ratio")
+        drivers = [
+            name
+            for name, value, threshold, comparison in (
+                ("leverage", leverage, 0.65, ">="),
+                ("liquidity", liquidity, 1.0, "<"),
+                ("operating margin", context.get("ebitda_margin"), 0.0, "<"),
+                ("operating cash flow", context.get("cash_flow_operations"), 0.0, "<"),
+            )
+            if value is not None and not pd.isna(value)
+            and ((value >= threshold) if comparison == ">=" else (value < threshold))
+        ]
+        evidence = (
+            "Observed threshold signals: " + ", ".join(drivers) + ". "
+            if drivers
+            else "No measured threshold breach is available from the current fields. "
+        )
+        return (
+            evidence
+            + "Use Scenario Simulator to change revenue, margin, or debt. It recalculates the "
+            "uploaded record's financial values and transparent rule-based index; it does not "
+            "produce an unsupported ML prediction."
+        )
     leverage = context.get("debt_to_assets", 0.0)
     liquidity = context.get("current_ratio")
     drivers = [
@@ -226,8 +260,7 @@ def _sensitivity_answer(context: dict[str, Any]) -> str:
     return (
         f"This assessment is most sensitive to {', '.join(drivers)}. "
         "Use the Scenario Simulator to apply an explicit revenue, margin, or debt change and read "
-        "the recalculated estimate; the simulator shows the model's own response rather than a "
-        "verbal estimate."
+        "the recalculated risk index rather than a verbal estimate."
     )
 
 
@@ -273,20 +306,88 @@ def generate_credit_copilot_response(
             for item in context.get("top_risk", [])
             if item.get("feature")
         ]
-        summary = (
-            f"This record has {context['coverage_label']} and was assessed with "
-            "transparent financial rules because the observed fields are not sufficient for the existing ML model. "
+        risk_index = context.get("risk_index")
+        if any(keyword in q for keyword in ("missing", "unavailable", "coverage", "data quality")):
+            return (
+                f"Observed core-field coverage is {context['coverage_label']}. Missing inputs are "
+                "unassessed rather than treated as zero or healthy."
+            )
+        if any(keyword in q for keyword in ("warning", "signal", "early")):
+            return (
+                "Active warning signals from the selected uploaded record: "
+                + (", ".join(warnings) if warnings else "none of the configured rules triggered.")
+            )
+        if any(keyword in q for keyword in ("strength", "healthy", "positive")):
+            strengths = [
+                label for label, value, threshold, comparison in (
+                    ("positive revenue growth", context.get("revenue_growth"), 0, "gt"),
+                    ("current ratio at or above 1.0x", current_ratio, 1, "ge"),
+                    ("positive operating cash flow", cash_flow, 0, "gt"),
+                    ("positive net profit", profit, 0, "gt"),
+                )
+                if value is not None and (
+                    (comparison == "gt" and value > threshold)
+                    or (comparison == "ge" and value >= threshold)
+                )
+            ]
+            return (
+                "Observed strengths in the selected upload: "
+                + (", ".join(strengths) if strengths else "none can be confirmed from the available fields.")
+            )
+        if any(keyword in q for keyword in ("improve", "recommend", "action", "management")):
+            actions = []
+            if "Negative operating cash flow" in warnings or (cash_flow is not None and cash_flow < 0):
+                actions.append("review working-capital conversion and cash collection")
+            if "Increasing leverage" in warnings or (leverage is not None and leverage >= 0.65):
+                actions.append("verify debt capacity and maturity exposure")
+            if "Falling liquidity" in warnings or (current_ratio is not None and current_ratio < 1):
+                actions.append("review short-term liquidity and obligations")
+            if "Deteriorating margins" in warnings or (margin is not None and margin < 0):
+                actions.append("investigate cost drivers and margin pressure")
+            return (
+                "Based on observed signals, prioritize "
+                + ("; ".join(actions) if actions else "continued monitoring of the uploaded financial fields")
+                + "."
+            )
+        if any(keyword in q for keyword in ("why", "risk", "risky", "factor")):
+            details = [*drivers, *warnings]
+            index_text = (
+                f"{float(risk_index):.1f}/100 rule index"
+                if risk_index is not None
+                else "no calculable rule index due to limited observed fields"
+            )
+            return (
+                f"The selected record is classified {context['risk_category']} with {index_text}. "
+                "Observed drivers/signals: "
+                + (", ".join(details[:5]) if details else "no configured adverse condition was triggered.")
+                + " This is a transparent heuristic, not a default probability."
+            )
+        if any(keyword in q for keyword in ("summarize", "summary", "financial health")):
+            values = []
+            for label, value, suffix in (
+                ("Revenue", revenue, ""),
+                ("Net profit", profit, ""),
+                ("Current ratio", current_ratio, "x"),
+                ("Debt/assets", leverage, ""),
+                ("Operating cash flow", cash_flow, ""),
+            ):
+                values.append(
+                    f"{label}: {value:,.4g}{suffix}" if value is not None else f"{label}: not available"
+                )
+            index_text = (
+                f"{float(risk_index):.1f}/100"
+                if risk_index is not None else "not available"
+            )
+            return (
+                f"The active upload's selected record is {context['risk_category']} with a "
+                f"rule-based risk index of {index_text}. " + "; ".join(values)
+                + f". Core-field coverage: {context['coverage_label']}. "
+                "The index is not a calibrated probability of default."
+            )
+        return (
+            f"Analysis is based on the selected uploaded record ({context['coverage_label']}). "
+            "Ask about its risk drivers, warnings, data coverage, or observed financial measures."
         )
-        if risk_prob is None:
-            summary += "There is not enough numeric data to calculate a risk index."
-        else:
-            summary += f"The rule-based risk index is {risk_prob:.1%} and the category is {context['risk_category']}."
-        if drivers:
-            summary += f" Observed rule-based risk drivers include {', '.join(drivers[:3])}."
-        if warnings:
-            summary += f" Active early-warning indicators: {', '.join(warnings[:3])}."
-        summary += " This index is a heuristic, not a calibrated probability of default."
-        return summary
 
     if any(keyword in q for keyword in ["why", "risky", "risk", "risk factors", "biggest risk"]):
         reasons = []
@@ -381,3 +482,104 @@ def generate_credit_copilot_response(
         f"{context['company']} currently shows a {context['risk_category']} profile with a {_probability_text(context)} distress probability. "
         "Liquidity, leverage, and operating cash flow are the key variables shaping the assessment, and the most immediate actions are to improve margin resilience and funding stability."
     )
+
+
+def generate_dataset_copilot_response(
+    question: str,
+    analysis: dict[str, Any],
+) -> str:
+    """Answer dataset questions deterministically from the currently analyzed upload."""
+    data = analysis["data"]
+    text = (question or "").strip()
+    lowered = text.casefold()
+    if not text:
+        return "Enter a question about the currently analyzed dataset."
+
+    for column in data.columns:
+        if str(column).casefold() in lowered:
+            series = data[column]
+            missing = int(series.isna().sum())
+            if str(column) in analysis["numeric_columns"]:
+                values = pd.to_numeric(series, errors="coerce").dropna()
+                if values.empty:
+                    return f"'{column}' has no usable numeric values in the uploaded dataset."
+                return (
+                    f"From the active upload, '{column}' has {len(values):,} numeric values "
+                    f"and {missing:,} missing records. Mean: {values.mean():,.4g}; "
+                    f"median: {values.median():,.4g}; range: {values.min():,.4g} to "
+                    f"{values.max():,.4g}."
+                )
+            counts = series.astype("string").fillna("Missing").value_counts().head(5)
+            distribution = ", ".join(f"{label}: {count:,}" for label, count in counts.items())
+            return (
+                f"From the active upload, '{column}' has {series.nunique(dropna=True):,} "
+                f"distinct observed values and {missing:,} missing records. Most common: "
+                f"{distribution or 'no observed values'}."
+            )
+
+    if any(word in lowered for word in ("missing", "quality", "complete", "incomplete")):
+        profile = analysis["profile"].sort_values("Missing %", ascending=False)
+        fields = [
+            f"{row['Variable']}: {row['Missing %']:.1f}%"
+            for _, row in profile.loc[profile["Missing"] > 0].head(5).iterrows()
+        ]
+        return (
+            f"The active upload has {analysis['missing_percent']:.1f}% missing cells and "
+            f"{analysis['duplicate_count']:,} duplicate rows. Highest missingness: "
+            + (", ".join(fields) if fields else "none; every profiled field is populated.")
+        )
+    if any(word in lowered for word in ("trend", "declin", "growth", "change over time")):
+        trends = analysis["trends"]
+        if trends.empty:
+            return "No usable date-based trend was found in the active upload."
+        return "Observed trends in the active upload: " + "; ".join(
+            f"{row['Variable']} {str(row['Direction']).lower()}"
+            + (
+                f" ({row['Change %']:.1f}% from {row['From']} to {row['To']})"
+                if pd.notna(row["Change %"]) else ""
+            )
+            for _, row in trends.head(6).iterrows()
+        ) + "."
+    if any(word in lowered for word in ("risk", "warning", "anomal", "outlier")):
+        details = analysis.get("warning_details", [])
+        if details:
+            return "Data-derived signals in the active upload: " + " ".join(
+                f"{item['Severity']}: {item['Evidence']} Reason: {item['Reason']}"
+                for item in details[:5]
+            )
+        return (
+            f"No structured warning was triggered in the active upload. Isolation Forest "
+            f"flagged {analysis['anomaly_count']:,} of {analysis['anomaly_rows_scored']:,} "
+            "scored rows as unusual."
+        )
+    if any(word in lowered for word in ("relationship", "correlation", "related")):
+        correlations = analysis["correlations"]
+        if correlations.empty:
+            return "At least two varying numeric fields are needed to calculate relationships in this upload."
+        return "Strongest observed numeric associations: " + "; ".join(
+            f"{row['Variable A']} and {row['Variable B']} "
+            f"(absolute correlation {row['Absolute correlation']:.2f})"
+            for _, row in correlations.head(5).iterrows()
+        ) + ". These are associations, not evidence of causation."
+    if any(word in lowered for word in ("recommend", "action", "next step")):
+        return "Recommendations based on the active upload: " + " ".join(
+            analysis["recommendations"][:5]
+        )
+    if any(word in lowered for word in ("model", "target", "prediction", "predict")):
+        model = analysis["model"]
+        if model.get("status") == "evaluated":
+            metrics = ", ".join(
+                f"{name.replace('_', ' ')} {value:.3f}"
+                for name, value in model.items()
+                if name in {"accuracy", "balanced_accuracy", "mae", "r2"}
+            )
+            return (
+                f"The active upload's target is '{model['target']}'. An exploratory "
+                f"{model['model']} hold-out evaluation used {model['test_rows']:,} test rows "
+                f"({metrics}). This is not calibrated and does not provide default probabilities."
+            )
+        return (
+            "No usable target was detected in the active upload, so no supervised model "
+            "prediction is available. Statistical patterns and anomalies are shown instead."
+        )
+    return str(analysis["executive_summary"])

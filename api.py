@@ -20,6 +20,11 @@ def create_app() -> FastAPI:
     def predict(request: PredictionRequest) -> dict[str, Any]:
         try:
             bundle = load_model_bundle(DEFAULT_MODEL_PATH)
+            if bundle.get("is_demo") is True:
+                raise HTTPException(
+                    status_code=503,
+                    detail="The configured model is synthetic demo data; train a model on reviewed labeled data before using the API.",
+                )
             return predict_financial_health(request.financial_data, bundle=bundle)
         except FileNotFoundError as error:
             raise HTTPException(status_code=503, detail="Train a model before using the API.") from error

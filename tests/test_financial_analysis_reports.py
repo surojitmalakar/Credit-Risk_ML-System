@@ -35,8 +35,8 @@ def test_sparse_data_uses_transparent_rules_and_coverage():
     assert not has_sufficient_ml_data(frame, 0)
     assert analysis["ratios"]["Current Ratio"] == 0.8
     assert analysis["ratios"]["Working Capital"] == -20_000
-    assert result["method"].startswith("Transparent rule-based")
-    assert result["risk_category"] in {"Moderate Risk", "High Risk"}
+    assert result["method"].startswith("Transparent weighted rule-based risk index")
+    assert result["risk_category"] in {"Low Risk", "Moderate Risk", "High Risk"}
     assert result["coverage_percent"] == analysis["coverage_percent"]
     assert any("cash generation" in item for item in recommendations)
 
@@ -73,6 +73,7 @@ def test_excel_and_pdf_reports_are_generated_locally():
     with pdfplumber.open(io.BytesIO(pdf)) as document:
         report_text = "\n".join(page.extract_text() or "" for page in document.pages)
     assert "Acme" in report_text
+    assert "Rule-based risk index (0-100 points)" in report_text
     with zipfile.ZipFile(io.BytesIO(workbook)) as archive:
         assert "xl/workbook.xml" in archive.namelist()
         assert b"Financial Ratios" in archive.read("xl/workbook.xml")
