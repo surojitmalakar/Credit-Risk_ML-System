@@ -27,9 +27,20 @@ def _shap_explainer(bundle: dict[str, Any]) -> Any:
     return shap.LinearExplainer(classifier, background)
 
 
-def explain_prediction(bundle: dict[str, Any], row: pd.DataFrame) -> dict[str, Any]:
-    """Explain the model output with signed per-feature SHAP values."""
-    features = engineer_features(row)
+def explain_prediction(
+    bundle: dict[str, Any],
+    row: pd.DataFrame,
+    features: pd.DataFrame | None = None,
+) -> dict[str, Any]:
+    """Explain the model output with signed per-feature SHAP values.
+
+    ``features`` reuses an already engineered frame so the explanation matches
+    the feature values that produced the displayed score.
+    """
+    if features is None:
+        features = engineer_features(row)
+    if len(features) != 1:
+        raise ValueError("Explanation accepts exactly one company-period at a time.")
     explanation = _shap_explainer(bundle)(_transform(bundle, features)[:1])
     values = np.asarray(explanation.values)
     if values.ndim == 3:

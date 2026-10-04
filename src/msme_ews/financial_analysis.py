@@ -202,6 +202,136 @@ def rule_based_assessment(
     }
 
 
+_INDEX_FIELDS = tuple(column for column in FINANCIAL_COLUMNS if column != "Sales_Growth")
+_RULE_WEIGHTS = {
+    "Negative Equity": 0.20,
+    "Debt / Equity": 0.16,
+    "Debt / Assets": 0.18,
+    "Net Profit Margin": 0.15,
+    "Return on Assets": 0.10,
+    "Interest Coverage": 0.12,
+    "Revenue Growth": 0.12,
+    "Operating Cash Flow": 0.15,
+}
+# Current Ratio is scored in two bands, matching rule_based_assessment.
+_CURRENT_RATIO_TIERS = ((1.0, 0.22), (1.2, 0.10))
+
+
+def observed_field_counts(frame: pd.DataFrame) -> pd.Series:
+    """Count usable core financial fields per record without a Python-level loop."""
+    observed = pd.DataFrame(index=frame.index)
+    for column in _INDEX_FIELDS:
+        source = frame[column] if column in frame.columns else pd.Series(np.nan, index=frame.index)
+        observed[column] = pd.to_numeric(source, errors="coerce").replace([np.inf, -np.inf], np.nan).notna()
+    return observed.sum(axis=1).astype("int64")
+
+
+def model_eligible_rows(frame: pd.DataFrame) -> pd.Series:
+    """Vectorized equivalent of :func:`has_sufficient_ml_data` for every record."""
+    core = pd.DataFrame(index=frame.index)
+    for column in _MODEL_CORE_FIELDS:
+        source = frame[column] if column in frame.columns else pd.Series(np.nan, index=frame.index)
+        core[column] = pd.to_numeric(source, errors="coerce").replace([np.inf, -np.inf], np.nan).notna()
+    return (observed_field_counts(frame) >= _MODEL_MINIMUM_FIELDS) & (core.sum(axis=1) >= 2)
+
+
+def _debt_to_equity(frame: pd.DataFrame, features: pd.DataFrame) -> pd.Series:
+    ratio = features["Debt_to_Equity"] if "Debt_to_Equity" in features else pd.Series(np.nan, index=frame.index)
+    debt = pd.to_numeric(frame["Debt"], errors="coerce") if "Debt" in frame else pd.Series(np.nan, index=frame.index)
+    assets = pd.to_numeric(frame["Total_Assets"], errors="coerce") if "Total_Assets" in frame else pd.Series(np.nan, index=frame.index)
+    liabilities = (
+        pd.to_numeric(frame["Total_Liabilities"], errors="coerce")
+        if "Total_Liabilities" in frame else pd.Series(np.nan, index=frame.index)
+    )
+    equity = assets - liabilities
+    equity = equity.where(assets.notna() & liabilities.notna())
+    equity = equity.fillna(assets - debt)
+    if "Equity_Value" in frame.columns:
+        equity = pd.to_numeric(frame["Equity_Value"], errors="coerce").combine_first(equity)
+    denominator = equity.where(equity.abs() > 1e-9)
+    return ratio.combine_first((debt / denominator).replace([np.inf, -np.inf], np.nan))
+
+
+def rule_based_risk_index(frame: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
+    """Vectorized equivalent of :func:`rule_based_assessment` for every record.
+
+    Returns one row per record with the heuristic index, band, and the observed
+    drivers, so a whole file can be screened in a single vectorized pass.
+    """
+
+    def column(name: str) -> pd.Series:
+        if name in features:
+            return pd.to_numeric(features[name], errors="coerce")
+        return pd.Series(np.nan, index=frame.index, dtype="float64")
+
+    current_ratio = column("Current_Ratio")
+    debt_equity = _debt_to_equity(frame, features)
+    debt_assets = column("Debt_to_Assets")
+    net_margin = column("Net_Profit_Margin")
+    return_on_assets = column("ROA")
+    coverage = column("Interest_Coverage")
+    growth = column("Sales_Growth")
+    cash_flow = (
+        pd.to_numeric(frame["Cash_Flow_Operations"], errors="coerce")
+        if "Cash_Flow_Operations" in frame else pd.Series(np.nan, index=frame.index, dtype="float64")
+    )
+
+    risk_flags = pd.DataFrame(index=frame.index)
+    protective = pd.DataFrame(index=frame.index)
+    risk_flags["Negative Equity"] = debt_equity < 0
+    risk_flags["Debt / Equity"] = (debt_equity > 2) & ~risk_flags["Negative Equity"]
+    risk_flags["Current Ratio"] = current_ratio < 1.2
+    risk_flags["Debt / Assets"] = debt_assets >= 0.65
+    risk_flags["Net Profit Margin"] = net_margin < 0
+    risk_flags["Return on Assets"] = return_on_assets < 0
+    risk_flags["Interest Coverage"] = coverage < 1.5
+    risk_flags["Revenue Growth"] = growth < -0.15
+    risk_flags["Operating Cash Flow"] = cash_flow < 0
+
+    protective["Current Ratio"] = current_ratio >= 1.5
+    protective["Debt / Equity"] = (debt_equity >= 0) & ~(risk_flags["Negative Equity"] | risk_flags["Debt / Equity"])
+    protective["Net Profit Margin"] = net_margin >= 0
+    protective["Return on Assets"] = return_on_assets >= 0
+    protective["Interest Coverage"] = coverage >= 1.5
+    protective["Revenue Growth"] = growth > 0
+    protective["Operating Cash Flow"] = cash_flow > 0
+
+    weight_matrix = risk_flags.astype("float64") * pd.Series(_RULE_WEIGHTS, dtype="float64")
+    weight_matrix["Current Ratio"] = risk_flags["Current Ratio"].astype("float64") * pd.Series(
+        np.select(
+            [current_ratio < _CURRENT_RATIO_TIERS[0][0], current_ratio < _CURRENT_RATIO_TIERS[1][0]],
+            [weight for _, weight in _CURRENT_RATIO_TIERS],
+            default=0.0,
+        ),
+        index=frame.index,
+        dtype="float64",
+    )
+    risk_score = weight_matrix.sum(axis=1)
+    protective_count = protective.sum(axis=1).astype("int64")
+    risk_factor_count = risk_flags.sum(axis=1).astype("int64")
+    observed_fields = observed_field_counts(frame)
+
+    probability = (0.10 + risk_score - np.minimum(0.20, protective_count * 0.04)).clip(0.05, 0.95)
+    probability = probability.where(observed_fields >= 2)
+    category = probability.map(
+        lambda value: "Insufficient Data" if pd.isna(value) else risk_category(float(value))
+    )
+
+    labels = risk_flags.apply(
+        lambda row: ", ".join(name for name in risk_flags.columns if bool(row[name])),
+        axis=1,
+    )
+    return pd.DataFrame({
+        "Rule risk index": probability,
+        "Rule risk category": category.astype("string"),
+        "Rule risk score": risk_score.round(4),
+        "Rule risk factors": risk_factor_count,
+        "Rule drivers": labels.astype("string"),
+        "Rule protective factors": protective_count,
+        "Observed core fields": observed_fields,
+    }, index=frame.index)
+
+
 def recommendations_for(
     row: pd.Series,
     analysis: dict[str, Any],

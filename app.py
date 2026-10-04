@@ -19,6 +19,11 @@ from html import escape
 
 from msme_ews.data import FINANCIAL_COLUMNS, validate_financial_data
 from msme_ews.credit_assessment import apply_scenario_adjustments, generate_risk_interpretation
+from msme_ews.copilot import (
+    build_credit_context,
+    generate_credit_copilot_response,
+    suggested_questions,
+)
 from msme_ews.data_intelligence import analyze_dataset
 from msme_ews.data_visualization import build_data_visualizations
 from msme_ews.demo import make_demo_data
@@ -33,6 +38,13 @@ from msme_ews.financial_analysis import (
 )
 from msme_ews.features import engineer_features
 from msme_ews.modeling import train_models
+from msme_ews.monitoring import (
+    build_snapshot,
+    drift_report,
+    monitoring_alerts,
+    prediction_stability,
+    snapshot_table,
+)
 from msme_ews.portfolio import analyze_credit_portfolio
 from msme_ews.prediction import DEFAULT_MODEL_PATH, predict_financial_health
 from msme_ews.reports import (
@@ -40,6 +52,22 @@ from msme_ews.reports import (
     create_data_intelligence_excel,
     create_data_intelligence_pdf,
     create_excel_analysis,
+)
+from msme_ews.screening import (
+    banded_exposure,
+    detect_exposure_column,
+    record_snapshot,
+    score_records,
+    screening_summary,
+)
+from msme_ews.table_tools import (
+    PAGE_SIZE_OPTIONS,
+    apply_column_filters,
+    apply_search,
+    apply_sort,
+    filter_candidates,
+    page_slice,
+    search_blob,
 )
 
 st.set_page_config(
@@ -57,6 +85,45 @@ def _validate_upload_cache_key(
 ) -> None:
     if not filename or revision < 0 or len(content_signature) != 64:
         raise ValueError("Invalid upload cache identity.")
+
+
+_HASH_CHUNK_BYTES = 1 << 20
+_DATASET_REGISTRY_LIMIT = 3
+_DATASET_REGISTRY: dict[str, tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]] = {}
+
+
+def _register_dataset(
+    dataset_key: str,
+    frame: pd.DataFrame,
+    features: pd.DataFrame,
+    flags: pd.DataFrame,
+) -> None:
+    """Hold a dataset in memory so cached work can key on a short string.
+
+    Passing a DataFrame to ``st.cache_data`` re-hashes every cell on each rerun;
+    keying on this identifier keeps repeated interaction work O(1) in the dataset.
+    """
+    _DATASET_REGISTRY[dataset_key] = (frame, features, flags)
+    while len(_DATASET_REGISTRY) > _DATASET_REGISTRY_LIMIT:
+        _DATASET_REGISTRY.pop(next(iter(_DATASET_REGISTRY)))
+
+
+def _dataset_parts(dataset_key: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    try:
+        return _DATASET_REGISTRY[dataset_key]
+    except KeyError:
+        raise RuntimeError(
+            "The selected dataset is no longer loaded; upload the file again."
+        ) from None
+
+
+def _content_signature(uploaded) -> str:
+    """Hash upload bytes in chunks so a large file is never copied twice."""
+    digest = hashlib.sha256()
+    view = uploaded.getbuffer()
+    for start in range(0, len(view), _HASH_CHUNK_BYTES):
+        digest.update(view[start:start + _HASH_CHUNK_BYTES])
+    return digest.hexdigest()
 
 
 @st.cache_data(show_spinner=False, max_entries=4)
@@ -136,15 +203,81 @@ def _cached_financial_features(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.Da
     return engineer_features(frame), early_warning_indicators(frame)
 
 
-@st.cache_data(show_spinner=False, max_entries=16)
-def _cached_financial_analysis(frame: pd.DataFrame, row_index: int) -> dict:
-    return analyze_financials(frame, row_index)
+@st.cache_data(show_spinner=False, max_entries=4)
+def _cached_screening_scores(dataset_key: str, bundle_signature: str) -> pd.DataFrame:
+    frame, features, flags = _dataset_parts(dataset_key)
+    return score_records(frame, features, flags, bundle=get_bundle())
 
 
-def _session_shap(cache_key: str, bundle: dict, selected: pd.DataFrame) -> dict:
+@st.cache_data(show_spinner=False, max_entries=128)
+def _cached_financial_analysis(dataset_key: str, row_index: int) -> dict:
+    frame, features, _ = _dataset_parts(dataset_key)
+    return analyze_financials(frame, row_index, features)
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _cached_search_blob(dataset_key: str, source: str = "dataset") -> pd.Series:
+    if source == "screening":
+        return search_blob(_cached_screening_scores(dataset_key, _bundle_signature(get_bundle())))
+    frame, _, _ = _dataset_parts(dataset_key)
+    return search_blob(frame)
+
+
+def _bundle_signature(bundle: dict) -> str:
+    """Content fingerprint so cached screening scores invalidate on a new model."""
+    report = bundle.get("report", {})
+    payload = repr([
+        list(bundle.get("features", [])),
+        report.get("selected_model"),
+        report.get("selection_metric"),
+        report.get("test_metrics"),
+    ])
+    return hashlib.sha256(payload.encode()).hexdigest()[:32]
+
+
+def _record_monitor_snapshot(
+    label: str,
+    lineage: str,
+    dataset_key: str,
+    frame: pd.DataFrame,
+    features: pd.DataFrame,
+    analysis: dict | None,
+) -> None:
+    """Keep one comparable snapshot per analysis revision for the monitoring page.
+
+    History is scoped to one dataset lineage, so revisions of an uploaded file are
+    never compared against unrelated demo data or a different upload.
+    Screened risk scores are attached lazily by the monitoring page so ordinary
+    page views do not pay for a full screening pass.
+    """
+    if st.session_state.get("_monitor_lineage") != lineage:
+        st.session_state["_monitor_lineage"] = lineage
+        st.session_state["_monitor_history"] = []
+    snapshot = build_snapshot(label, frame, features, analysis)
+    snapshot["_dataset_key"] = dataset_key
+    history = st.session_state.setdefault("_monitor_history", [])
+    history[:] = [entry for entry in history if entry["label"] != label]
+    history.append(snapshot)
+    del history[:-12]
+
+
+def _snapshot_risk_scores(snapshot: dict, bundle: dict) -> pd.Series:
+    key = snapshot.get("_dataset_key")
+    if not key:
+        return pd.Series(dtype="float64")
+    try:
+        scores = _cached_screening_scores(key, _bundle_signature(bundle))
+    except RuntimeError:
+        return pd.Series(dtype="float64")
+    return scores["Distress probability"]
+
+
+def _session_shap(cache_key: str, bundle: dict, selected: pd.DataFrame, features: pd.DataFrame) -> dict:
     cache = st.session_state.setdefault("_local_shap_cache", {})
     if cache_key not in cache:
-        cache[cache_key] = explain_prediction(bundle, selected)
+        cache[cache_key] = explain_prediction(bundle, selected, features=features)
+        while len(cache) > 8:
+            cache.pop(next(iter(cache)))
     return cache[cache_key]
 
 
@@ -152,6 +285,8 @@ def _session_global_shap(cache_key: str, bundle: dict, frame: pd.DataFrame) -> p
     cache = st.session_state.setdefault("_global_shap_cache", {})
     if cache_key not in cache:
         cache[cache_key] = global_importance(bundle, frame)
+        while len(cache) > 4:
+            cache.pop(next(iter(cache)))
     return cache[cache_key]
 
 
@@ -1347,171 +1482,481 @@ def render_ai_risk_interpretation(
         st.caption("SHAP contributions explain model behavior; they are associations, not causal findings.")
 
 
-def build_credit_context(frame: pd.DataFrame, selected: pd.DataFrame, selected_features: pd.DataFrame, flags: pd.DataFrame, row_index: int, result: dict) -> dict:
-    row = selected.iloc[0].copy()
-    feat = selected_features.iloc[0].copy()
-    active_flags = list(flags.iloc[row_index][flags.iloc[row_index]].index)
-    company_id = row.get("company_id", "Selected company")
-    revenue = float(feat.get("Revenue", 0.0) or 0.0)
-    profit = float(feat.get("Net_Profit", 0.0) or 0.0)
-    current_ratio = float(feat.get("Current_Ratio", float("nan")) or float("nan")) if pd.notna(feat.get("Current_Ratio")) else float("nan")
-    leverage = float(feat.get("Debt_to_Assets", 0.0) or 0.0)
-    margin = float(feat.get("EBITDA_Margin", 0.0) or 0.0)
-    coverage = float(feat.get("Interest_Coverage", 0.0) or 0.0)
-    cash_flow = float(feat.get("Cash_Flow_Operations", 0.0) or 0.0)
-    probability = result.get("distress_probability")
-    health_score = result.get("health_score")
+def _band_colour(band: str) -> str:
     return {
-        "company": company_id,
-        "period": row.get("period", "latest identified period"),
-        "revenue": revenue,
-        "profit": profit,
-        "current_ratio": current_ratio,
-        "debt_to_assets": leverage,
-        "ebitda_margin": margin,
-        "interest_coverage": coverage,
-        "cash_flow_operations": cash_flow,
-        "default_probability": float(probability) if probability is not None else None,
-        "health_score": health_score,
-        "risk_category": result["risk_category"],
-        "assessment_method": result.get("method", "Existing ML model"),
-        "coverage_label": result.get("coverage_label", "Coverage not available"),
-        "warnings": active_flags,
-        "top_risk": result.get("top_risk_factors", []),
-        "protective": result.get("protective_factors", []),
-    }
+        "Low Risk": "#10B981",
+        "Moderate Risk": "#F59E0B",
+        "High Risk": "#F97316",
+        "Critical Risk": "#EF4444",
+    }.get(band, "#94A3B8")
 
 
-def generate_credit_copilot_response(question: str, context: dict) -> str:
-    q = (question or "").lower()
-    warnings = context["warnings"]
-    risk_prob = context["default_probability"]
-    current_ratio = context["current_ratio"]
-    leverage = context["debt_to_assets"]
-    margin = context["ebitda_margin"]
-    cash_flow = context["cash_flow_operations"]
-    revenue = context["revenue"]
-    profit = context["profit"]
+def _record_label(frame: pd.DataFrame, position: int) -> str:
+    row = frame.iloc[position]
+    company = row.get("company_id", f"Record {position + 1}")
+    period = row.get("period")
+    return f"{company} · {period}" if pd.notna(period) else str(company)
 
-    if not q:
-        q = "summarize the financial health"
 
-    if context.get("assessment_method") != "Existing ML model":
-        drivers = [
-            str(item.get("feature", ""))
-            for item in context.get("top_risk", [])
-            if item.get("feature")
-        ]
-        summary = (
-            f"This record has {context['coverage_label']} and was assessed with "
-            "transparent financial rules because the observed fields are not sufficient for the existing ML model. "
+def render_filtered_grid(
+    frame: pd.DataFrame,
+    key: str,
+    *,
+    blob_source: str = "dataset",
+    page_size_options: tuple[int, ...] = PAGE_SIZE_OPTIONS,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Render a server-side searchable, filterable, sorted table of one page only."""
+    st.markdown("<div class='panel-header'><h3>Records</h3></div>", unsafe_allow_html=True)
+    control_cols = st.columns([2, 1, 1])
+    with control_cols[0]:
+        search = st.text_input(
+            "Search",
+            key=f"{key}_search",
+            placeholder="Search any column",
         )
-        if risk_prob is None:
-            summary += "There is not enough numeric data to calculate a risk index."
-        else:
-            summary += f"The rule-based risk index is {risk_prob:.1%} and the category is {context['risk_category']}."
-        if drivers:
-            summary += f" Observed rule-based risk drivers include {', '.join(drivers[:3])}."
-        if warnings:
-            summary += f" Active early-warning indicators: {', '.join(warnings[:3])}."
-        summary += " This index is a heuristic, not a calibrated probability of default."
-        return summary
-
-    if any(keyword in q for keyword in ["why", "risky", "risk", "risk factors", "biggest risk"]):
-        reasons = []
-        if pd.notna(current_ratio) and current_ratio < 1.0:
-            reasons.append(f"liquidity is thin at {current_ratio:.2f}x")
-        if leverage >= 0.65:
-            reasons.append(f"debt loads are elevated at {leverage:.2f} debt-to-assets")
-        if margin < 0 or cash_flow < 0:
-            reasons.append("operating margin and cash generation are under pressure")
-        if warnings:
-            reasons.append("early-warning flags such as " + ", ".join(warnings[:3]))
-        if not reasons:
-            reasons.append("the model is pricing in a moderate probability of distress across revenue, leverage, and margin signals")
-        return (
-            f"{context['company']} is considered risky because " + "; ".join(reasons) + ". "
-            f"The current risk estimate sits at {risk_prob:.1%}, and the model is particularly sensitive to leverage, liquidity, and operating cash generation."
+    candidates = filter_candidates(frame)
+    with control_cols[1]:
+        band_column = next(
+            (column for column in candidates if column.lower() in {"risk category", "risk_category"}),
+            None,
+        )
+        band_filter = (
+            st.multiselect(
+                "Risk band",
+                candidates[band_column],
+                key=f"{key}_band",
+                placeholder="All bands",
+            )
+            if band_column
+            else []
+        )
+    with control_cols[2]:
+        page_size = st.selectbox(
+            "Rows per page",
+            page_size_options,
+            index=1 if len(page_size_options) > 1 else 0,
+            key=f"{key}_size",
         )
 
-    if any(keyword in q for keyword in ["shap", "feature importance", "factors", "top risk"]):
-        top_risk = context["top_risk"][:3] if context.get("top_risk") else ["Revenue pressure", "Leverage strain", "Liquidity deterioration"]
-        return (
-            f"The largest contributors to the distress score are {', '.join(str(item) for item in top_risk[:3])}. "
-            "In practice, elevated leverage, weaker liquidity, and pressure on profitability are the strongest drivers of the current model output."
+    extra_cols = [column for column in candidates if column != band_column]
+    column_filters: dict[str, list[str]] = {}
+    if extra_cols:
+        with st.expander("Column filters"):
+            filter_cols = st.columns(min(3, len(extra_cols)))
+            for position, column in enumerate(extra_cols):
+                with filter_cols[position % len(filter_cols)]:
+                    column_filters[column] = st.multiselect(
+                        column,
+                        candidates[column],
+                        key=f"{key}_filter_{column}",
+                        placeholder="All",
+                    )
+
+    filtered = apply_search(frame, _cached_search_blob(dataset_key, blob_source), search)
+    if band_column and band_filter:
+        filtered = filtered[filtered[band_column].astype("string").isin(band_filter).to_numpy()]
+    filtered = apply_column_filters(filtered, column_filters)
+    visible, pages, page = page_slice(filtered, st.session_state.get(f"{key}_page", 1), page_size)
+
+    sort_cols = st.columns([2, 1, 1])
+    with sort_cols[0]:
+        sort_column = st.selectbox(
+            "Sort by",
+            [""] + [str(column) for column in frame.columns],
+            key=f"{key}_sort",
         )
+    with sort_cols[1]:
+        ascending = st.toggle("Ascending", value=False, key=f"{key}_asc")
+    with sort_cols[2]:
+        st.caption(f"{len(filtered):,} of {len(frame):,} records match")
+    if sort_column:
+        visible = apply_sort(visible, sort_column, ascending)
 
-    if any(keyword in q for keyword in ["credit", "lend", "considered for credit", "should this company"]):
-        if risk_prob < 0.25 and current_ratio > 1.0 and cash_flow >= 0:
-            return f"Based on current signals, {context['company']} appears broadly creditworthy for a cautious structure: distress probability is {risk_prob:.1%}, cash flow is positive, and liquidity remains above 1.0x."
-        return f"This company should be treated cautiously. With a {risk_prob:.1%} distress probability and several active warning signals, underwriting should require tighter covenants, collateral review, or a lower exposure limit."
+    nav_cols = st.columns([1, 3, 1])
+    with nav_cols[0]:
+        if st.button("Previous", key=f"{key}_prev", disabled=page <= 1):
+            st.session_state[f"{key}_page"] = max(1, page - 1)
+            st.rerun()
+    with nav_cols[1]:
+        st.caption(f"Page {page} of {pages}")
+    with nav_cols[2]:
+        if st.button("Next", key=f"{key}_next", disabled=page >= pages):
+            st.session_state[f"{key}_page"] = min(pages, page + 1)
+            st.rerun()
+    return filtered, visible
 
-    if any(keyword in q for keyword in ["weakness", "weakest", "financial weaknesses"]):
-        weaknesses = []
-        if pd.notna(current_ratio) and current_ratio < 1.0:
-            weaknesses.append(f"liquidity is weak at {current_ratio:.2f}x")
-        if leverage >= 0.65:
-            weaknesses.append(f"leverage is elevated at {leverage:.2f} debt-to-assets")
-        if margin < 0 or cash_flow < 0:
-            weaknesses.append("operating margin and cash generation are deteriorating")
-        if not weaknesses:
-            weaknesses.append("operating resilience is uneven despite an otherwise stable revenue base")
-        return f"The main weaknesses are {', '.join(weaknesses)}. These are the items most likely to pressure repayment capacity if conditions worsen."
 
-    if any(keyword in q for keyword in ["strength", "strengths", "what are the strengths", "healthy"]):
-        strengths = []
-        if revenue > 0:
-            strengths.append(f"revenue base remains at {revenue:,.0f}")
-        if profit > 0:
-            strengths.append(f"net profit remains positive at {profit:,.0f}")
-        if current_ratio > 1.0:
-            strengths.append(f"liquidity remains above 1.0x at {current_ratio:.2f}x")
-        if not strengths:
-            strengths.append("the model still sees some positive operating characteristics even under moderate risk")
-        return f"The main strengths are {', '.join(strengths)}. Those fundamentals help offset the risk profile, but they are not yet strong enough to eliminate the monitoring need."
-
-    if any(keyword in q for keyword in ["management improve", "improve", "should management"]):
-        actions = [
-            "tighten working-capital discipline and reduce receivable days",
-            "lower dependency on debt-funded growth and improve debt service capacity",
-            "improve operating cash conversion to sustain repayment capability",
-        ]
-        return f"Management should prioritize {', '.join(actions)}. These steps would strengthen liquidity, reduce leverage pressure, and improve the credit standing most quickly."
-
-    if any(keyword in q for keyword in ["increase risk", "what could cause", "credit risk to increase", "cause risk"]):
-        return (
-            "The risk would rise if revenue contracts materially, operating cash flow turns negative, debt builds further, "
-            "or liquidity slips below 1.0x. In this scenario, the model would likely move toward a higher default probability."
-        )
-
-    if any(keyword in q for keyword in ["summarize", "summary", "financial health"]):
-        return (
-            f"{context['company']} is currently assessed as {context['risk_category']} with a {context['default_probability']:.1%} distress probability and a health score of {context['health_score']:.0f}/100. "
-            f"Revenue is {revenue:,.0f}, net profit is {profit:,.0f}, liquidity is {current_ratio:.2f}x, and leverage is {leverage:.2f} debt-to-assets. "
-            f"The main watchpoints are {', '.join(warnings[:3]) if warnings else 'limited but active risk factors'} ."
-        )
-
-    if any(keyword in q for keyword in ["early warning", "warning signals", "signals"]):
-        return (
-            f"The early-warning flags currently active are: {', '.join(warnings) if warnings else 'none at the current period'}. "
-            "These are designed to highlight deteriorating liquidity, leverage drift, weak margins, and negative cash generation before distress becomes more visible."
-        )
-
-    if any(keyword in q for keyword in ["revenue falls", "20%", "fall by 20", "if revenue falls"]):
-        adjusted_revenue = revenue * 0.8
-        return (
-            f"If revenue were to fall by 20%, the company would likely see a weaker margin profile and reduced cash conversion. "
-            f"At an adjusted revenue level of {adjusted_revenue:,.0f}, the risk profile would likely move toward higher distress because leverage and fixed-cost pressure would become more visible."
-        )
-
-    return (
-        f"{context['company']} currently shows a {context['risk_category']} profile with a {context['default_probability']:.1%} distress probability. "
-        f"Liquidity, leverage, and operating cash flow are the key variables shaping the assessment, and the most immediate actions are to improve margin resilience and funding stability."
+def render_snapshot_detail(snapshot: dict, key: str) -> None:
+    probability = snapshot["distress_probability"]
+    state = _state_color(snapshot["risk_category"])
+    heading = (
+        f"{escape(snapshot['company'])} · {escape(snapshot['period'])}"
     )
+    st.markdown(
+        f"<div class='risk-summary-card {state}'><div class='risk-state'>{heading}</div>"
+        f"<p>{escape(snapshot['risk_category'])} · "
+        f"{'not calculable' if probability is None else format(probability, '.1%')} · "
+        f"{escape(snapshot['method'])}</p>"
+        f"<p>Data coverage: {escape(snapshot['coverage_label'])}</p></div>",
+        unsafe_allow_html=True,
+    )
+    if snapshot["warnings"]:
+        render_warning_signals(snapshot["warnings"])
+    else:
+        st.info("No early-warning signal is active for this record.")
+    ratios = pd.DataFrame(
+        [{"Ratio": label, "Value": value if value is not None else "Not available"}
+         for label, value in snapshot["ratios"].items()]
+    ).astype({"Value": "string"})
+    st.dataframe(ratios, width="stretch", hide_index=True, key=key)
+    if snapshot["top_risk_factors"]:
+        st.dataframe(
+            pd.DataFrame(snapshot["top_risk_factors"]),
+            width="stretch",
+            hide_index=True,
+            key=f"{key}_factors",
+        )
+
+
+def render_screening_page(frame: pd.DataFrame, features: pd.DataFrame, flags: pd.DataFrame, bundle: dict) -> None:
+    page_header(
+        "Portfolio Screening",
+        "Every record is scored in one vectorized pass, so a whole file can be ranked without "
+        "opening each company-period.",
+    )
+    scores = _cached_screening_scores(dataset_key, _bundle_signature(bundle))
+    if scores.empty:
+        st.info("There are no records to screen in this dataset.")
+        return
+    summary = screening_summary(scores)
+
+    metric_cols = st.columns(5)
+    metric_cols[0].metric("Records screened", f"{summary['records']:,}")
+    metric_cols[1].metric("ML model scored", f"{summary['model_records']:,}")
+    metric_cols[2].metric("Rule-based index", f"{summary['rule_records']:,}")
+    metric_cols[3].metric("Elevated risk (>=60%)", f"{summary['elevated_records']:,}")
+    mean_text = (
+        "Not available"
+        if summary["mean_probability"] is None
+        else f"{summary['mean_probability']:.1%}"
+    )
+    metric_cols[4].metric("Mean risk estimate", mean_text)
+    st.caption(
+        "Band membership is a research classification of this model's output. "
+        "Rule-based records use a transparent heuristic index, not a calibrated probability of default."
+    )
+
+    if summary["bands"]:
+        band_frame = pd.DataFrame(
+            [{"Risk category": band, "Records": count} for band, count in summary["bands"].items()]
+        )
+        figure = px.bar(
+            band_frame,
+            x="Records",
+            y="Risk category",
+            orientation="h",
+            color="Risk category",
+            color_discrete_map={band: _band_colour(band) for band in summary["bands"]},
+            title="Screened records by risk band",
+        )
+        figure.update_layout(showlegend=False, xaxis_title=None, yaxis_title=None)
+        render_chart(figure, height=250, margin={"t": 42, "r": 12, "b": 38, "l": 120})
+
+    exposure_column = detect_exposure_column(frame)
+    if exposure_column:
+        exposure = banded_exposure(scores, frame, exposure_column)
+        if not exposure.empty:
+            st.markdown("<div class='panel-header'><h3>Exposure by risk band</h3></div>", unsafe_allow_html=True)
+            st.dataframe(exposure, width="stretch", hide_index=True)
+            st.caption(
+                f"Aggregated from the observed '{exposure_column}' column. Band totals describe the "
+                "current dataset only and are not a portfolio forecast."
+            )
+
+    filtered, visible = render_filtered_grid(scores, "screening", blob_source="screening")
+    st.dataframe(visible, width="stretch", hide_index=True, key="screening_table")
+    if filtered.empty:
+        st.info("No screened record matches the current search and filters.")
+        return
+
+    position_column = "Distress probability"
+    candidate_positions = visible["_position"].astype(int).tolist()
+    with st.expander("Focused record detail"):
+        label_lookup = {
+        int(position): _record_label(frame, int(position))
+        for position in visible["_position"]
+    }
+        choice = st.selectbox(
+            "Record",
+            candidate_positions,
+            format_func=lambda position: label_lookup[position],
+            key="screening_focus",
+        )
+        snapshot = record_snapshot(frame, int(choice), features, flags, bundle)
+        render_snapshot_detail(snapshot, "screening_focus_detail")
+        st.caption(
+            "This detail uses the same feature pass and model scoring as the table above, so the "
+            "two views agree."
+        )
+    st.caption(
+        f"Screening ranks {len(filtered):,} of {summary['records']:,} records. "
+        "Sorting and paging happen on the server, so only the visible page is sent to the browser."
+    )
+
+
+def _format_ratio(value: object) -> str:
+    """Format one ratio for display; mixed text keeps the column a plain string."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return "Not available"
+    if isinstance(value, (int, float, np.floating, np.integer)):
+        return f"{float(value):,.3f}"
+    return str(value)
+
+
+def render_comparison_page(frame: pd.DataFrame, features: pd.DataFrame, flags: pd.DataFrame, bundle: dict, company_rows: list[int]) -> None:
+    page_header(
+        "Compare Records",
+        "Place up to four company-periods side by side to see where their risk differs.",
+    )
+    limit = min(len(company_rows), 4)
+    options = list(company_rows)[: max(1, min(len(company_rows), 500))]
+    chosen = st.multiselect(
+        "Records",
+        options,
+        default=company_rows[:limit],
+        format_func=lambda position: _record_label(frame, int(position)),
+        key="comparison_records",
+        help="Up to four records are compared; the first four are pre-selected.",
+    )
+    if not chosen:
+        st.info("Select at least one record to compare.")
+        return
+    chosen = [int(position) for position in chosen][:4]
+    snapshots = [record_snapshot(frame, position, features, flags, bundle) for position in chosen]
+
+    head_cols = st.columns(len(snapshots))
+    for column, snapshot in zip(head_cols, snapshots, strict=False):
+        probability = snapshot["distress_probability"]
+        column.metric(
+            snapshot["company"],
+            "Not calculable" if probability is None else f"{probability:.1%}",
+            snapshot["risk_category"],
+        )
+
+    ratio_labels: list[str] = []
+    for snapshot in snapshots:
+        for label in snapshot["ratios"]:
+            if label not in ratio_labels:
+                ratio_labels.append(label)
+    comparison = pd.DataFrame(
+        {
+            snapshot["company"]: {
+                label: (
+                    snapshot["ratios"].get(label)
+                    if snapshot["ratios"].get(label) is not None
+                    else "Not available"
+                )
+                for label in ratio_labels
+            }
+            for snapshot in snapshots
+        }
+    )
+    st.markdown("<div class='panel-header'><h3>Ratio comparison</h3></div>", unsafe_allow_html=True)
+    st.dataframe(comparison, width="stretch", key="comparison_ratios")
+    st.caption("Zero denominators are treated as missing rather than zero; missing inputs are not treated as healthy.")
+
+    chart_rows = [
+        {
+            "Record": f"{snapshot['company']} · {snapshot['period']}",
+            "Risk category": snapshot["risk_category"],
+            "Distress probability": (
+                snapshot["distress_probability"]
+                if snapshot["distress_probability"] is not None
+                else 0.0
+            ),
+        }
+        for snapshot in snapshots
+    ]
+    figure = px.bar(
+        pd.DataFrame(chart_rows),
+        x="Distress probability",
+        y="Record",
+        orientation="h",
+        color="Risk category",
+        color_discrete_map={band: _band_colour(band) for band in {row["Risk category"] for row in chart_rows}},
+        title="Risk estimate by record",
+    )
+    figure.update_layout(showlegend=False, xaxis_title="Risk estimate", yaxis_title=None, xaxis_range=[0, 1])
+    render_chart(figure, height=max(220, 120 + 60 * len(chart_rows)), margin={"t": 42, "r": 12, "b": 38, "l": 150})
+
+    coverage = pd.DataFrame([
+        {
+            "Record": f"{snapshot['company']} · {snapshot['period']}",
+            "Method": snapshot["method"],
+            "Data coverage": snapshot["coverage_label"],
+            "Warning signals": len(snapshot["warnings"]),
+            "Active warnings": ", ".join(snapshot["warnings"]) or "None active",
+        }
+        for snapshot in snapshots
+    ])
+    st.markdown("<div class='panel-header'><h3>Assessment basis</h3></div>", unsafe_allow_html=True)
+    st.dataframe(coverage, width="stretch", hide_index=True, key="comparison_basis")
+
+    if "company_id" in frame.columns and "period" in frame.columns and len(snapshots) >= 2:
+        shared = {snapshot["company"] for snapshot in snapshots}
+        if len(shared) == 1:
+            st.markdown("<div class='panel-header'><h3>Trend across the selected periods</h3></div>", unsafe_allow_html=True)
+            series = trend_data(frame, snapshots[0]["company"])
+            if len(series) > 1:
+                metric = st.selectbox(
+                    "Measure",
+                    ["Revenue", "Current_Ratio", "Debt_to_Assets", "EBITDA_Margin", "Interest_Coverage"],
+                    key="comparison_metric",
+                )
+                trend_figure = px.line(
+                    series,
+                    x="period",
+                    y=metric,
+                    markers=True,
+                    color_discrete_sequence=["#2563EB"],
+                    title=f"{metric.replace('_', ' ')} over time",
+                )
+                render_chart(trend_figure, height=300)
+            else:
+                st.info("At least two dated periods are needed for a trend line.")
+    disclaimer()
+
+
+def render_data_explorer(frame: pd.DataFrame) -> None:
+    page_header(
+        "Data Explorer",
+        "Search, filter, sort, and page through the loaded records without sending the whole "
+        "table to the browser.",
+    )
+    filtered, visible = render_filtered_grid(frame, "explorer")
+    st.dataframe(
+        visible,
+        width="stretch",
+        hide_index=True,
+        key="explorer_table",
+        column_config={
+            str(column): st.column_config.NumberColumn(str(column), format="%.2f")
+            for column in visible.columns
+            if pd.api.types.is_float_dtype(visible[column])
+        },
+    )
+    st.caption(
+        f"Showing {len(visible):,} of {len(filtered):,} matching rows across "
+        f"{len(frame.columns):,} variables. Filters, search, and sorting run on the server."
+    )
+    download_cols = st.columns(2)
+    with download_cols[0]:
+        st.download_button(
+            "Download filtered rows (CSV)",
+            data=filtered.to_csv(index=False).encode("utf-8"),
+            file_name="filtered_records.csv",
+            mime="text/csv",
+            key="explorer_download_filtered",
+            width="stretch",
+        )
+    with download_cols[1]:
+        st.download_button(
+            "Download visible page (CSV)",
+            data=visible.to_csv(index=False).encode("utf-8"),
+            file_name="visible_page.csv",
+            mime="text/csv",
+            key="explorer_download_page",
+            width="stretch",
+        )
+
+
+def render_monitoring_page(bundle: dict) -> None:
+    page_header(
+        "Model Monitoring",
+        "Compare successive analyses of the same dataset and track how the screened risk "
+        "distribution moves.",
+    )
+    history = st.session_state.get("_monitor_history", [])
+    if len(history) < 1:
+        st.info("No analysis revision has been recorded in this session yet.")
+        return
+    snapshots = history
+    st.markdown("<div class='panel-header'><h3>Recorded revisions</h3></div>", unsafe_allow_html=True)
+    st.dataframe(
+        snapshot_table(snapshots),
+        width="stretch",
+        hide_index=True,
+        key="monitor_snapshots",
+    )
+    st.caption(
+        "Each row is one Analyze Dataset or Re-analyze run. Revisions are compared on shape, "
+        "completeness, and observed distributions."
+    )
+    if len(snapshots) < 2:
+        st.info("Run Re-analyze, or load a revised file, to produce a second revision and compare.")
+    else:
+        baseline, current = snapshots[0], snapshots[-1]
+        drift = drift_report(baseline, current)
+        st.markdown(
+            f"<div class='panel-header'><h3>Drift vs baseline ({escape(str(baseline['label']))} → "
+            f"{escape(str(current['label']))})</h3></div>",
+            unsafe_allow_html=True,
+        )
+        st.dataframe(drift, width="stretch", hide_index=True, key="monitor_drift")
+        st.caption(
+            "Population Stability Index (PSI) is a screening signal for distribution movement. "
+            "PSI below 0.10 is treated as stable, 0.10 to 0.25 as a watch item, and above 0.25 as "
+            "a material shift that warrants revalidation. PSI is not a model validity test."
+        )
+        score_history = [
+            _snapshot_risk_scores(snapshot, bundle) for snapshot in snapshots
+        ]
+        alerts = monitoring_alerts(drift, score_history)
+        st.markdown("<div class='panel-header'><h3>Alerts</h3></div>", unsafe_allow_html=True)
+        if alerts:
+            for alert in alerts:
+                st.warning(alert)
+        else:
+            st.success("No material movement was detected between these revisions.")
+
+        st.markdown("<div class='panel-header'><h3>Screened risk stability</h3></div>", unsafe_allow_html=True)
+        stability = prediction_stability(score_history)
+        if stability.empty or stability["Scored records"].sum() == 0:
+            st.info("Screened risk scores are not stored for these revisions.")
+        else:
+            st.dataframe(stability, width="stretch", hide_index=True, key="monitor_stability")
+            latest = stability.iloc[-1]
+            figure = px.line(
+                stability,
+                x="Revision",
+                y="Elevated share",
+                markers=True,
+                color_discrete_sequence=["#2563EB"],
+                title="Share of records in the elevated-risk band by revision",
+            )
+            figure.update_yaxes(tickformat=".0%")
+            render_chart(figure, height=260)
+
+    report = bundle.get("report", {})
+    st.markdown("<div class='panel-header'><h3>Model in service</h3></div>", unsafe_allow_html=True)
+    model_cols = st.columns(4)
+    model_cols[0].metric("Selected model", str(report.get("selected_model", "Not available")))
+    model_cols[1].metric("Selection metric", str(report.get("selection_metric", "Not available")))
+    accuracy = report.get("test_metrics", {}).get("accuracy")
+    model_cols[2].metric("Hold-out accuracy", f"{accuracy:.1%}" if isinstance(accuracy, float) else "Not available")
+    model_cols[3].metric("Bundle feature count", len(bundle.get("features", [])))
+    st.caption(
+        "Monitoring here observes the served model and the dataset it scores. It does not retrain, "
+        "recalibrate, or certify the model; those steps need separate validation and governance."
+    )
+    disclaimer()
 
 
 NAVIGATION = {
     "Overview": "Executive Overview",
+    "Screening": "Portfolio Screening",
+    "Comparison": "Compare Records",
+    "Data Explorer": "Data Explorer",
     "Data Intelligence": "Data Intelligence",
     "Financial Health": "MSME Financial Health",
     "Risk Prediction": "Risk Prediction",
@@ -1521,6 +1966,7 @@ NAVIGATION = {
     "Scenario Simulator": "Scenario Simulator",
     "Credit Assessment": "Credit Assessment",
     "Model Performance": "Model Performance",
+    "Monitoring": "Model Monitoring",
     "Methodology": "Methodology",
     "About": "About",
 }
@@ -1573,8 +2019,8 @@ if uploaded is not None:
             upload_signature = st.session_state["_upload_signature"]
             uploaded_content = b""
         else:
+            upload_signature = _content_signature(uploaded)
             uploaded_content = uploaded.getvalue()
-            upload_signature = hashlib.sha256(uploaded_content).hexdigest()
             st.session_state["_upload_token"] = upload_token
             st.session_state["_upload_signature"] = upload_signature
             st.session_state["_upload_analysis_revision"] = 0
@@ -1858,6 +2304,21 @@ if page == "Data Intelligence":
 
 bundle = get_bundle()
 features, flags = financial_base
+dataset_key = repr(upload_pipeline_key)
+_register_dataset(dataset_key, frame, features, flags)
+_monitor_label = (
+    f"{uploaded.name} · revision {analysis_revision}" if uploaded is not None else "Synthetic demo data"
+)
+if dataset_key not in st.session_state.setdefault("_monitor_recorded", set()):
+    st.session_state["_monitor_recorded"].add(dataset_key)
+    _record_monitor_snapshot(
+        _monitor_label,
+        uploaded.name if uploaded is not None else "synthetic-demo",
+        dataset_key,
+        frame,
+        features,
+        data_intelligence,
+    )
 if "company_id" in frame:
     company_values = frame["company_id"].astype(str)
     company_options = company_values.drop_duplicates().tolist()
@@ -1889,7 +2350,12 @@ with selector_cols[1]:
 
 def selected_assessment() -> dict:
     if model_available_for_record:
-        result = predict_financial_health(selected, bundle=bundle, include_explanations=False)
+        result = predict_financial_health(
+            selected,
+            bundle=bundle,
+            include_explanations=False,
+            features=selected_features,
+        )
         result["method"] = "Existing ML model"
         result["health_score"] = max(
             0.0,
@@ -1924,7 +2390,7 @@ if selection_cache_key in selection_cache:
     current_assessment = cached_selection["assessment"]
 else:
     selected, selected_features = frame.iloc[[row_index]], features.iloc[[row_index]]
-    financial_analysis = _cached_financial_analysis(frame, row_index)
+    financial_analysis = _cached_financial_analysis(dataset_key, row_index)
     active_warning_signals = flags.iloc[row_index][flags.iloc[row_index]].index.tolist()
     recommendations = recommendations_for(
         frame.iloc[row_index],
@@ -2107,6 +2573,18 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
             unsafe_allow_html=True,
         )
         copilot_context = build_credit_context(frame, selected, selected_features, flags, row_index, result)
+        transcript = st.session_state.setdefault("copilot_history", [])
+        prompt_chips = suggested_questions(copilot_context)
+        chip_cols = st.columns(3)
+        preset = None
+        for position, prompt in enumerate(prompt_chips):
+            with chip_cols[position % 3]:
+                if st.button(prompt, key=f"copilot_chip_{position}", width="stretch"):
+                    preset = prompt
+        if preset is not None:
+            # Set before the widget is created; Streamlit forbids writing to a
+            # widget's session-state key after it has been instantiated.
+            st.session_state["copilot_question"] = preset
         with st.form("credit_copilot"):
             question = st.text_area(
                 "Question",
@@ -2126,8 +2604,13 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
             uploaded.size if uploaded is not None else 0,
             question,
         )
-        if submitted or st.session_state.get("credit_copilot_signature") != response_signature:
-            response = generate_credit_copilot_response(question, copilot_context)
+        if preset is not None:
+            response_signature = (*response_signature[:-1], preset)
+        if submitted or preset is not None or st.session_state.get("credit_copilot_signature") != response_signature:
+            history = [entry["question"] for entry in transcript]
+            response = generate_credit_copilot_response(question, copilot_context, history=history)
+            transcript.append({"question": question, "answer": response, "company": str(selected_company)})
+            del transcript[:-12]
             st.session_state["credit_copilot_response"] = response
             st.session_state["credit_copilot_signature"] = response_signature
         if st.session_state.get("credit_copilot_response"):
@@ -2135,6 +2618,15 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
                 f"<div class='copilot-output'>{escape(st.session_state['credit_copilot_response'])}</div>",
                 unsafe_allow_html=True,
             )
+        if len(transcript) > 1:
+            with st.expander(f"Conversation history ({len(transcript)})"):
+                for entry in reversed(transcript):
+                    st.markdown(f"**Q · {escape(str(entry['question']))}**")
+                    st.caption(escape(str(entry["answer"])))
+            if st.button("Clear conversation", key="copilot_clear"):
+                transcript.clear()
+                st.session_state.pop("credit_copilot_response", None)
+                st.session_state.pop("credit_copilot_signature", None)
 
     if page in {"Executive Overview", "AI Copilot"}:
         if model_available_for_record:
@@ -2254,12 +2746,15 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
                     operating_margin_change=margin_change / 100,
                     debt_change=debt_change / 100,
                 )
-                scenario_analysis = analyze_financials(scenario_data, 0)
+                scenario_feature_frame = engineer_features(scenario_data)
+                scenario_features = scenario_feature_frame.iloc[0]
+                scenario_analysis = analyze_financials(scenario_data, 0, scenario_feature_frame)
                 if model_available_for_record:
                     scenario_result = predict_financial_health(
                         scenario_data,
                         bundle=bundle,
                         include_explanations=False,
+                        features=scenario_feature_frame,
                     )
                     scenario_result["method"] = "Existing ML model"
                     scenario_result["health_score"] = (
@@ -2275,12 +2770,15 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
                         scenario_result["health_score"] = (
                             1 - scenario_result["distress_probability"]
                         ) * 100
-                scenario_features = engineer_features(scenario_data).iloc[0]
                 scenario_warnings = early_warning_indicators(scenario_data).iloc[0]
                 scenario_signals = scenario_warnings[scenario_warnings].index.tolist()
                 if model_available_for_record:
                     try:
-                        scenario_explanation = explain_prediction(bundle, scenario_data)
+                        scenario_explanation = explain_prediction(
+                            bundle,
+                            scenario_data,
+                            features=scenario_feature_frame,
+                        )
                         scenario_result["top_risk_factors"] = scenario_explanation["risk_factors"]
                         scenario_result["protective_factors"] = scenario_explanation["protective_factors"]
                     except Exception as error:
@@ -2370,6 +2868,17 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
             )
         disclaimer()
 
+elif page == "Portfolio Screening":
+    render_screening_page(frame, features, flags, bundle)
+    disclaimer()
+
+elif page == "Compare Records":
+    render_comparison_page(frame, features, flags, bundle, company_rows)
+
+elif page == "Data Explorer":
+    render_data_explorer(frame)
+    disclaimer()
+
 elif page == "MSME Financial Health":
     page_header("MSME Financial Health", "Extracted statement inputs, available-data coverage, and derived ratios.")
     financial_summary = pd.concat(
@@ -2455,6 +2964,7 @@ elif page == "Explainable AI":
                 f"{upload_pipeline_key!r}:{row_index}",
                 bundle,
                 selected,
+                selected_features,
             )
             st.subheader("Why did the model assign this risk?")
             st.caption("Positive SHAP contributions increase the model output for distress; negative contributions reduce it. Associations are not causal.")
@@ -2549,6 +3059,9 @@ elif page == "Model Performance":
     else:
         st.caption("No held-out protected-group diagnostics are stored in this model bundle.")
     disclaimer()
+
+elif page == "Model Monitoring":
+    render_monitoring_page(bundle)
 
 elif page == "Methodology":
     page_header("Methodology & Research Mode", "Definitions, evaluation choices, limitations, and responsible interpretation.")

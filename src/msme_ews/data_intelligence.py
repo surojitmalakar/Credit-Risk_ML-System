@@ -34,6 +34,12 @@ _ROLE_PATTERNS: dict[str, tuple[str, ...]] = {
 _FINANCIAL_TERMS = {"revenue / income", "profit", "debt / exposure", "assets", "liabilities"}
 _TARGET_WORDS = ("default", "delinquen", "risk", "fraud", "churn", "target", "label", "outcome", "status")
 _IDENTIFIER_WORDS = ("id", "identifier", "account", "reference", "ref", "code", "number", "uuid")
+# Enough values to decide whether a column holds dates without parsing all of them.
+_DATE_PROBE_ROWS = 2_000
+# Model and segmentation stages are estimated from bounded samples.
+_MODEL_SAMPLE_ROWS = 20_000
+_ANOMALY_TRAIN_ROWS = 10_000
+_ANOMALY_SCORE_ROWS = 30_000
 
 
 def _key(value: object) -> str:
@@ -88,6 +94,18 @@ def _role_for_column(column: object, values: pd.Series) -> list[str]:
     return list(dict.fromkeys(roles))
 
 
+def _looks_numeric(series: pd.Series, nonempty: int) -> pd.Series | None:
+    """Fast vectorized numeric parse, falling back to text cleanup when needed."""
+    try:
+        converted = pd.to_numeric(series, errors="coerce")
+    except (TypeError, ValueError):
+        return series.map(_numeric_value)
+    converted = converted.replace([np.inf, -np.inf], np.nan)
+    if converted.notna().sum() / nonempty < 0.8:
+        return series.map(_numeric_value)
+    return converted
+
+
 def _parse_frame(frame: pd.DataFrame) -> tuple[pd.DataFrame, list[str], list[str]]:
     parsed = frame.copy()
     numeric_columns: list[str] = []
@@ -104,15 +122,21 @@ def _parse_frame(frame: pd.DataFrame) -> tuple[pd.DataFrame, list[str], list[str
             continue
         name = _key(column)
         date_hint = any(word in name for word in ("date", "time", "period", "year", "month"))
-        date_like_values = nonempty.astype(str).str.contains(r"[-/:]", regex=True).mean() >= 0.6
+        # Date detection only needs a representative sample; parsing every value of a
+        # large object column costs seconds and almost never changes the verdict.
+        probe = nonempty.head(_DATE_PROBE_ROWS)
+        date_like_values = probe.astype(str).str.contains(r"[-/:]", regex=True).mean() >= 0.6
         if date_hint or date_like_values:
-            dates = pd.to_datetime(source, errors="coerce", format="mixed")
+            dates = pd.to_datetime(probe, errors="coerce", format="mixed")
             plausible = dates.dropna().between("1900-01-01", "2100-12-31").mean() if dates.notna().any() else 0
-            if dates.notna().sum() / len(nonempty) >= 0.6 and plausible >= 0.8:
-                parsed[original] = dates
+            if dates.notna().sum() / len(probe) >= 0.6 and plausible >= 0.8:
+                parsed[original] = (
+                    dates if len(probe) == len(nonempty)
+                    else pd.to_datetime(source, errors="coerce", format="mixed")
+                )
                 date_columns.append(column)
                 continue
-        converted = source.map(_numeric_value)
+        converted = _looks_numeric(source, len(nonempty))
         if converted.notna().sum() / len(nonempty) >= 0.8 and not any(word in name for word in _IDENTIFIER_WORDS):
             parsed[original] = converted
             numeric_columns.append(column)
@@ -175,7 +199,7 @@ def _is_risk_label(value: object) -> bool:
 
 def _model_result(frame: pd.DataFrame, target: str, identifiers: list[str]) -> dict[str, Any]:
     result: dict[str, Any] = {"status": "not trained", "target": target}
-    usable = frame.dropna(subset=[target]).head(20_000).copy()
+    usable = frame.dropna(subset=[target]).head(_MODEL_SAMPLE_ROWS).copy()
     y = usable[target]
     classification = not pd.api.types.is_numeric_dtype(y) or y.nunique() <= 10
     if len(usable) < 30:
@@ -334,6 +358,7 @@ def analyze_dataset(frame: pd.DataFrame, filename: str = "uploaded_data") -> dic
 
     anomaly_scores = pd.Series(0.0, index=data.index)
     anomalies = pd.Series(False, index=data.index)
+    anomaly_rows_scored = 0
     if numeric and len(data) >= 10:
         anomaly_data = data[numeric].replace([np.inf, -np.inf], np.nan)
         anomaly_data = anomaly_data.loc[:, anomaly_data.notna().any()]
@@ -341,11 +366,15 @@ def analyze_dataset(frame: pd.DataFrame, filename: str = "uploaded_data") -> dic
             filled = SimpleImputer(strategy="median").fit_transform(anomaly_data)
             if np.isfinite(filled).all():
                 detector = IsolationForest(contamination="auto", random_state=42, n_estimators=100, n_jobs=1)
-                detector.fit(filled[:10_000])
-                scores = -detector.score_samples(filled)
-                anomaly_scores = pd.Series(scores, index=data.index)
+                detector.fit(filled[:_ANOMALY_TRAIN_ROWS])
+                # Scoring is linear in rows; bound it and record what was scored.
+                scored = filled[:_ANOMALY_SCORE_ROWS]
+                scores = -detector.score_samples(scored)
+                anomaly_rows_scored = len(scored)
                 cutoff = float(np.quantile(scores, 0.95))
-                anomalies = anomaly_scores >= cutoff
+                anomaly_scores.iloc[:len(scored)] = scores
+                anomalies.iloc[:len(scored)] = scores >= cutoff
+    target = targets[0] if targets else None
     segment_frame = pd.DataFrame()
     segment_columns = [
         column for column in numeric
@@ -355,7 +384,7 @@ def analyze_dataset(frame: pd.DataFrame, filename: str = "uploaded_data") -> dic
         segment_data = data[segment_columns].replace([np.inf, -np.inf], np.nan)
         filled_segments = SimpleImputer(strategy="median").fit_transform(segment_data)
         if np.isfinite(filled_segments).all():
-            scaled = StandardScaler().fit_transform(filled_segments[:20_000])
+            scaled = StandardScaler().fit_transform(filled_segments[:_MODEL_SAMPLE_ROWS])
             cluster_count = min(4, max(2, int(np.sqrt(len(scaled) / 2))))
             labels = KMeans(n_clusters=cluster_count, random_state=42, n_init=10).fit_predict(scaled)
             segment_frame = pd.DataFrame({
@@ -363,7 +392,7 @@ def analyze_dataset(frame: pd.DataFrame, filename: str = "uploaded_data") -> dic
                 "Records": 1,
             }).groupby("Segment", as_index=False).sum()
             segment_frame["Share %"] = (segment_frame["Records"] / len(labels) * 100).round(2)
-            if target := next(iter(_target_columns(data, roles)), None):
+            if target:
                 target_share = data[target].head(len(labels)).astype("string").fillna("Missing").reset_index(drop=True)
                 segment_frame["Most common target value"] = [
                     target_share[np.asarray(labels) == label].mode().iloc[0]
@@ -382,7 +411,6 @@ def analyze_dataset(frame: pd.DataFrame, filename: str = "uploaded_data") -> dic
             np.where(missing_risk.to_numpy() >= 0.5, "High missingness; interpretation is limited", "No anomaly flag"),
         ),
     })
-    target = targets[0] if targets else None
     model_result = _model_result(data, target, identifiers) if target else {
         "status": "not trained",
         "reason": "No explicit low-cardinality target variable was detected; no predicted risk is reported.",
@@ -440,7 +468,10 @@ def analyze_dataset(frame: pd.DataFrame, filename: str = "uploaded_data") -> dic
         change_text = f" ({trend['Change %']:.1f}% from first to last observed period)" if pd.notna(trend["Change %"]) else ""
         findings.append(f"Observed trend for {trend['Variable']}: {trend['Direction'].lower()}{change_text}.")
     if anomalies.any():
-        findings.append(f"{int(anomalies.sum()):,} records fall in the top 5% of anomaly scores.")
+        findings.append(
+            f"{int(anomalies.sum()):,} of {anomaly_rows_scored:,} scored records fall in the top 5% of anomaly scores."
+            + ("" if anomaly_rows_scored >= len(data) else " Scoring was capped for runtime; unscored rows are not anomaly-free.")
+        )
     if not segment_frame.empty:
         findings.append(f"Numeric patterns support exploratory segmentation into {len(segment_frame)} groups.")
     recommendations = []
@@ -546,6 +577,8 @@ def analyze_dataset(frame: pd.DataFrame, filename: str = "uploaded_data") -> dic
         "missing_percent": round(missing_rate * 100, 2),
         "data_quality_percent": round((1 - missing_rate) * 100, 2),
         "anomaly_count": int(anomalies.sum()),
+        "anomaly_rows_scored": anomaly_rows_scored,
+        "anomaly_rows_total": int(len(data)),
         "model": model_result,
         "analysis_mode": "Automatic Dataset Intelligence",
         "prediction_available": model_result["status"] == "evaluated",
