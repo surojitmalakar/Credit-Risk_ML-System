@@ -27,7 +27,7 @@ from msme_ews.prediction import DEFAULT_MODEL_PATH, predict_financial_health
 
 st.set_page_config(
     page_title="CREDIT RISK AI",
-    page_icon="◈",
+    page_icon="C",
     layout="wide",
     initial_sidebar_state="auto",
 )
@@ -47,8 +47,12 @@ st.markdown("""
     --danger:#EF4444;
     --text:#F8FAFC;
     --muted:#94A3B8;
+    --input:#111C2B;
+    --input-hover:#16263A;
+    --input-border:#26384D;
+    --placeholder:#64748B;
     --border:#1E293B;
-    --shadow:rgba(2, 6, 23, 0.24);
+    --shadow:rgba(2, 6, 23, 0.16);
 }
 html, body, [class*="css"] { font-family:'Inter','Manrope',sans-serif; color:var(--text); }
 html, body { width:100%; max-width:100%; overflow-x:hidden; }
@@ -85,8 +89,8 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
     border-right:1px solid #1B2C3E;
 }
 [data-testid="stSidebar"] {
-    min-width:15rem !important;
-    max-width:15rem !important;
+    min-width:14.5rem !important;
+    max-width:14.5rem !important;
 }
 [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2,
 [data-testid="stSidebar"] h3, [data-testid="stSidebar"] h4,
@@ -113,13 +117,16 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
 [data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) * {
     color:#FFFFFF !important;
 }
+[data-testid="stSidebar"] [data-testid="stRadioOption"] > div > div:first-child {
+    display:none;
+}
 [data-testid="stSidebar"] [data-baseweb="select"] > div,
 [data-testid="stSidebar"] [data-testid="stFileUploader"] section,
 [data-testid="stSidebar"] [data-testid="stFileUploader"] div,
 [data-testid="stSidebar"] input,
 [data-testid="stSidebar"] textarea {
-    background:#0F172A;
-    border-color:#334155;
+    background:var(--input);
+    border-color:var(--input-border);
     color:#F8FAFC;
 }
 [data-testid="stSidebar"] [data-baseweb="select"] *,
@@ -131,9 +138,116 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
     border-radius:12px;
 }
 [data-testid="stSidebar"] [data-testid="stFileUploader"] button {
-    background:rgba(37, 99, 235, 0.15) !important;
-    border-color:#60A5FA !important;
-    color:#EFF6FF !important;
+    background:var(--primary) !important;
+    border-color:var(--primary) !important;
+    color:#FFFFFF !important;
+}
+[data-testid="stSelectbox"] [data-baseweb="select"] > div {
+    background:var(--input) !important;
+    background-color:var(--input) !important;
+    border:1px solid var(--input-border) !important;
+    border-radius:10px;
+}
+[data-testid="stSelectbox"] [data-baseweb="select"] > div * {
+    background:var(--input) !important;
+    background-color:var(--input) !important;
+    color:var(--text) !important;
+}
+[data-testid="stSelectbox"] [role="group"] {
+    background:var(--input) !important;
+    border:1px solid var(--input-border) !important;
+    border-radius:10px !important;
+}
+[data-testid="stSelectbox"] [role="combobox"] {
+    background:var(--input) !important;
+    border:0 !important;
+    color:var(--text) !important;
+    -webkit-text-fill-color:var(--text);
+}
+[data-testid="stSelectbox"] button[aria-label="Open"] {
+    background:var(--input) !important;
+    border:0 !important;
+    color:var(--text) !important;
+    border-radius:0 10px 10px 0 !important;
+}
+[data-testid="stSelectbox"] button[aria-label="Open"]:hover {
+    background:var(--input-hover) !important;
+}
+[data-testid="stSelectbox"] [role="group"]:focus-within {
+    background:var(--input-hover) !important;
+    border-color:var(--primary) !important;
+}
+[data-testid="stSelectbox"] [data-baseweb="select"] > div:hover {
+    background:var(--input-hover) !important;
+    background-color:var(--input-hover) !important;
+}
+[data-testid="stSelectbox"] [data-baseweb="select"] *,
+[data-testid="stSelectbox"] input {
+    color:var(--text) !important;
+    -webkit-text-fill-color:var(--text);
+}
+[data-testid="stSelectbox"] input::placeholder,
+[data-testid="stTextInput"] input::placeholder,
+[data-testid="stTextArea"] textarea::placeholder {
+    color:var(--placeholder) !important;
+    -webkit-text-fill-color:var(--placeholder);
+    opacity:1;
+}
+[data-baseweb="popover"] > div,
+[data-baseweb="menu"],
+[role="listbox"] {
+    background:#111827 !important;
+    border:1px solid var(--input-border) !important;
+    color:#E5E7EB !important;
+}
+[role="option"] {
+    background:#111827 !important;
+    color:#E5E7EB !important;
+}
+[role="option"]:hover,
+[role="option"][aria-selected="true"] {
+    background:#1D4ED8 !important;
+    color:#FFFFFF !important;
+}
+[data-testid="stFileUploader"] section {
+    background:var(--input) !important;
+    border:1px dashed var(--input-border) !important;
+    border-radius:12px !important;
+    color:var(--text) !important;
+}
+[data-testid="stFileUploader"] section *,
+[data-testid="stFileUploader"] [data-testid="stMarkdownContainer"] {
+    color:var(--text) !important;
+}
+[data-testid="stFileUploader"] small,
+[data-testid="stFileUploader"] [data-testid="stCaptionContainer"] {
+    color:var(--muted) !important;
+}
+[data-testid="stFileUploader"] button {
+    background:var(--primary) !important;
+    border:1px solid var(--primary) !important;
+    border-radius:8px !important;
+    color:#FFFFFF !important;
+}
+[data-testid="stFileUploader"] button:hover {
+    background:#1D4ED8 !important;
+}
+.stApp input,
+.stApp textarea,
+.stApp [data-baseweb="input"] > div,
+.stApp [data-baseweb="textarea"] {
+    background:var(--input);
+    border-color:var(--input-border);
+    color:var(--text);
+}
+.stApp input:focus,
+.stApp textarea:focus,
+.stApp [data-baseweb="input"]:focus-within,
+.stApp [data-baseweb="textarea"]:focus-within,
+.stApp [data-testid="stSelectbox"]:focus-within [data-baseweb="select"] > div {
+    background:var(--input-hover);
+    border-color:var(--primary) !important;
+    outline:none;
 }
 .eyebrow { font:600 11px 'Inter','Manrope',sans-serif; color:#94A3B8; text-transform:uppercase; letter-spacing:.08em; }
 .topbar {
@@ -315,6 +429,14 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
     font-weight:700;
     margin-bottom:.35rem;
 }
+.risk-summary-card .risk-state::before {
+    content:"";
+    width:.58rem;
+    height:.58rem;
+    flex:0 0 .58rem;
+    border-radius:50%;
+    background:var(--risk-accent, var(--cyan));
+}
 .risk-summary-card p { color:var(--muted) !important; margin:.3rem 0; line-height:1.5; }
 .driver-legend { color:var(--muted); font-size:.78rem; margin:.1rem 0 .45rem; }
 .signal-list { display:grid; gap:.45rem; }
@@ -328,7 +450,18 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
     background:var(--panel);
     line-height:1.35;
 }
-.signal-indicator { flex:0 0 auto; font-size:.9rem; line-height:1.35; }
+.signal-indicator {
+    flex:0 0 .58rem;
+    width:.58rem;
+    height:.58rem;
+    margin-top:.28rem;
+    border-radius:50%;
+    background:var(--signal-color, var(--muted));
+}
+.signal-indicator.healthy { --signal-color:var(--healthy); }
+.signal-indicator.watch { --signal-color:var(--warning); }
+.signal-indicator.warning { --signal-color:#F97316; }
+.signal-indicator.critical { --signal-color:var(--danger); }
 .signal-item strong { display:block; font-size:.88rem; color:var(--text); }
 .signal-item span { display:block; color:var(--muted); font-size:.78rem; margin-top:.08rem; }
 .creator-credit { color:var(--muted); font-size:.75rem; font-weight:500; }
@@ -406,13 +539,15 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
     line-height:1.4;
 }
 .assessment-bullets li::before {
-    content:"✓";
-    color:#10B981;
-    font-weight:800;
+    content:"";
+    width:.48rem;
+    height:.48rem;
+    flex:0 0 .48rem;
+    border-radius:50%;
+    background:var(--healthy);
 }
 .assessment-bullets.risk li::before {
-    content:"⚠";
-    color:#F59E0B;
+    background:var(--warning);
 }
 .assessment-recommendation {
     margin-top:1rem;
@@ -548,11 +683,22 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
         min-width:0 !important;
     }
     [data-testid="stSidebar"][aria-expanded="true"] {
-        width:min(78vw, 17rem) !important;
-        min-width:min(78vw, 17rem) !important;
-        max-width:78vw !important;
+        width:min(72vw, 16rem) !important;
+        min-width:min(72vw, 16rem) !important;
+        max-width:72vw !important;
     }
     [data-testid="stSidebar"] { min-width:0 !important; max-width:none !important; }
+    [data-testid="stSelectbox"],
+    [data-testid="stFileUploader"],
+    [data-baseweb="popover"],
+    [role="listbox"] {
+        width:100%;
+        max-width:100vw;
+        min-width:0;
+    }
+    [role="listbox"] { max-height:min(55vh, 24rem); overflow-y:auto; }
+    [data-testid="stFileUploader"] section { padding:.75rem !important; }
+    [data-testid="stFileUploader"] button { min-height:42px; }
     [data-testid="stMetric"] { width:100%; padding:14px; }
     .kpi-card { min-height:0; padding:.75rem .8rem; }
     .topbar { padding:.15rem 0 .4rem; }
@@ -720,22 +866,21 @@ _WARNING_PRESENTATION = {
 
 
 def render_warning_signals(active_signals: list[str]) -> None:
-    st.markdown("<div class='panel-header'><h3>⚠ Early Warning Signals</h3></div>", unsafe_allow_html=True)
+    st.markdown("<div class='panel-header'><h3>Early Warning Signals</h3></div>", unsafe_allow_html=True)
     if not active_signals:
         st.markdown(
-            "<div class='signal-item'><span class='signal-indicator'>🟢</span>"
+            "<div class='signal-item'><span class='signal-indicator healthy'></span>"
             "<div><strong>Healthy</strong><span>No configured early-warning conditions are triggered.</span></div></div>",
             unsafe_allow_html=True,
         )
         return
 
-    symbols = {"watch": "🟡", "warning": "🟠", "critical": "🔴"}
     labels = {"watch": "Watch", "warning": "Warning", "critical": "Critical"}
     items = []
     for signal in active_signals:
         severity, detail = _WARNING_PRESENTATION.get(signal, ("watch", "Configured early-warning condition is triggered."))
         items.append(
-            f"<div class='signal-item'><span class='signal-indicator'>{symbols[severity]}</span>"
+            f"<div class='signal-item'><span class='signal-indicator {severity}'></span>"
             f"<div><strong>{escape(signal)} · {labels[severity]}</strong>"
             f"<span>{escape(detail)}</span></div></div>"
         )
@@ -842,7 +987,6 @@ def render_ai_risk_interpretation(
         shap_factors=result.get("top_risk_factors", []),
     )
     state = _state_color(interpretation["risk_category"])
-    symbols = {"healthy": "🟢", "watch": "🟡", "high": "🟠", "critical": "🔴", "neutral": "⚪"}
     risk_heading = {
         "Low Risk": "LOW CREDIT RISK",
         "Moderate Risk": "MODERATE CREDIT RISK",
@@ -853,7 +997,7 @@ def render_ai_risk_interpretation(
     st.markdown(
         f"""
         <div class="risk-summary-card {state}">
-            <div class="risk-state">{symbols[state]} {escape(risk_heading)}</div>
+            <div class="risk-state">{escape(risk_heading)}</div>
             <p>{escape(interpretation['explanation'])}</p>
             <p><strong>Priority:</strong> {escape(interpretation['priority'])}</p>
         </div>
@@ -1004,17 +1148,17 @@ def generate_credit_copilot_response(question: str, context: dict) -> str:
 
 
 NAVIGATION = {
-    "🏠 Overview": "Executive Overview",
-    "📊 Financial Health": "MSME Financial Health",
-    "🎯 Risk Prediction": "Risk Prediction",
-    "🤖 AI Copilot": "AI Copilot",
-    "🔍 Explainability": "Explainable AI",
-    "⚠️ Early Warning": "Early-Warning Indicators",
-    "🔮 Scenario Simulator": "Scenario Simulator",
-    "📄 Credit Assessment": "Credit Assessment",
-    "📈 Model Performance": "Model Performance",
-    "🧠 Methodology": "Methodology",
-    "ℹ️ About": "About",
+    "Overview": "Executive Overview",
+    "Financial Health": "MSME Financial Health",
+    "Risk Prediction": "Risk Prediction",
+    "AI Copilot": "AI Copilot",
+    "Explainable AI": "Explainable AI",
+    "Early Warning": "Early-Warning Indicators",
+    "Scenario Simulator": "Scenario Simulator",
+    "Credit Assessment": "Credit Assessment",
+    "Model Performance": "Model Performance",
+    "Methodology": "Methodology",
+    "About": "About",
 }
 
 
@@ -1168,7 +1312,7 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
 
     if page in {"Executive Overview", "AI Copilot"}:
         st.markdown(
-            "<div class='panel-header'><h3>🤖 AI Credit Copilot</h3></div>"
+            "<div class='panel-header'><h3>AI Credit Copilot</h3></div>"
             "<div class='creator-credit'>Ask anything about this company's financial health.</div>",
             unsafe_allow_html=True,
         )
