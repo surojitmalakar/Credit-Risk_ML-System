@@ -227,7 +227,7 @@ def _tabular_document_type(frame: pd.DataFrame) -> str:
         return "financial_credit_dataset" if financial_columns else "customer_loan_dataset"
     if financial_columns:
         return "financial_credit_dataset"
-    return "unsupported"
+    return "unknown_dataset"
 
 
 def _looks_like_statement_layout(frame: pd.DataFrame) -> bool:
@@ -279,6 +279,12 @@ def _extract_tabular_document(content: bytes, filename: str, suffix: str) -> Doc
         )
     normalized, detected = _normalize_tabular_columns(frame)
     document_type = _tabular_document_type(normalized)
+    if document_type == "unknown_dataset":
+        from msme_ews.data_intelligence import analyze_dataset
+
+        inferred = analyze_dataset(normalized, filename)["dataset_type"]
+        if inferred in {"Customer dataset", "Loan/credit dataset"}:
+            document_type = "customer_loan_dataset"
     company_column = next(
         (column for column in ("customer_name", "company_id", "customer_id", "loan_id") if column in normalized),
         None,
@@ -311,15 +317,9 @@ def _extract_tabular_document(content: bytes, filename: str, suffix: str) -> Doc
     status = {
         "financial_credit_dataset": f"Detected a financial/credit dataset with {len(normalized)} record(s).",
         "customer_loan_dataset": f"Detected a customer/loan dataset with {len(normalized)} borrower record(s).",
-        "unsupported": "No recognized financial or credit-risk columns were found.",
+        "unknown_dataset": f"Loaded an unfamiliar dataset with {len(normalized)} record(s).",
     }.get(document_type, f"Detected a financial statement dataset with {len(normalized)} record(s).")
     warnings = [f"Read sheet: {name}" for name in sources if suffix != ".csv"]
-    if document_type == "unsupported":
-        warnings.append(
-            "Detected columns: " + (", ".join(detected) if detected else "none") +
-            ". Expected financial values (revenue, profit, assets, liabilities, debt) or credit fields "
-            "(customer/loan ID, credit score, loan amount, default/loan/risk status)."
-        )
     if document_type == "customer_loan_dataset" and not set(FINANCIAL_COLUMNS) & set(normalized.columns):
         warnings.append(
             "This dataset contains credit/customer fields but no financial statement columns; "
@@ -703,6 +703,57 @@ def _merge_records(records: list[dict[str, object]], company: str) -> pd.DataFra
     return frame[["company_id", "period", *FINANCIAL_COLUMNS]]
 
 
+def _generic_pdf_extraction(
+    tables: list[pd.DataFrame],
+    full_text: str,
+    filename: str,
+    company: str,
+    warnings: list[str],
+) -> DocumentExtraction:
+    pdf_frames = []
+    for table in tables:
+        cleaned = table.dropna(how="all").dropna(axis=1, how="all")
+        if cleaned.empty:
+            continue
+        header = cleaned.iloc[0].fillna("").astype(str).str.strip()
+        if header.ne("").sum() >= 2:
+            cleaned = cleaned.iloc[1:].copy()
+            cleaned.columns = header
+        pdf_frames.append(cleaned.reset_index(drop=True))
+    if pdf_frames:
+        generic_frame = pd.concat(pdf_frames, ignore_index=True, sort=False)
+    elif full_text.strip():
+        generic_frame = pd.DataFrame({
+            "Extracted text": [line.strip() for line in full_text.splitlines() if line.strip()]
+        })
+    else:
+        generic_frame = pd.DataFrame()
+    if generic_frame.empty:
+        raise ValueError("This PDF contains no readable table or text data.")
+    from msme_ews.data_intelligence import analyze_dataset
+
+    dataset_type = analyze_dataset(generic_frame, filename)["dataset_type"]
+    document_type = (
+        "customer_loan_dataset"
+        if dataset_type in {"Customer dataset", "Loan/credit dataset"}
+        else "unknown_dataset"
+    )
+    normalized, detected = _normalize_tabular_columns(generic_frame)
+    warnings.append(
+        "No standard financial-statement layout was recognized; extracted content is profiled as a general dataset."
+    )
+    return DocumentExtraction(
+        frame=normalized,
+        status=f"Loaded readable PDF content for automatic profiling ({len(normalized)} extracted record(s)).",
+        source_type="PDF",
+        company_name=company,
+        tables_found=len(tables),
+        warnings=warnings,
+        document_type=document_type,
+        detected_columns=detected,
+    )
+
+
 def extract_financial_document(
     file: BinaryIO | bytes,
     filename: str,
@@ -718,7 +769,7 @@ def extract_financial_document(
     if suffix in {".csv", ".xlsx", ".xls"}:
         tabular_result = _extract_tabular_document(content, filename, suffix)
         if (
-            tabular_result.document_type != "unsupported"
+            tabular_result.document_type != "unknown_dataset"
             or not _looks_like_statement_layout(tabular_result.frame)
         ):
             return tabular_result
@@ -776,11 +827,15 @@ def extract_financial_document(
         ))
     if suffix == ".pdf" and full_text and not records:
         records.extend(_records_from_text(full_text, company))
+    if not records and suffix == ".pdf":
+        return _generic_pdf_extraction(tables, full_text, filename, company, warnings)
     frame = _merge_records(records, company)
     company_values = frame["company_id"].dropna().astype(str).unique()
     if len(company_values) == 1:
         company = company_values[0]
     if not frame.loc[:, FINANCIAL_COLUMNS].notna().any().any():
+        if suffix == ".pdf":
+            return _generic_pdf_extraction(tables, full_text, filename, company, warnings)
         raise ValueError("The document was read, but no usable financial values were recognized.")
     if len(frame) == 1 and pd.isna(frame.iloc[0]["period"]):
         warnings.append("Financial year was not identified; trend analysis is unavailable.")

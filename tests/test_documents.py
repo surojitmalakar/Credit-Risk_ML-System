@@ -51,15 +51,15 @@ def test_customer_master_csv_uses_dataset_path_and_detects_portfolio_risk():
     ]
 
 
-def test_unrecognized_csv_returns_columns_and_unsupported_classification():
+def test_unfamiliar_csv_is_loaded_for_general_profiling():
     content = b"customer_ref,region,signup_date\nA1,North,2024-01-03\n"
 
     extracted = extract_financial_document(content, "customers.csv")
 
-    assert extracted.document_type == "unsupported"
+    assert extracted.document_type == "customer_loan_dataset"
     assert extracted.detected_columns == ["customer_ref", "region", "signup_date"]
-    assert "No recognized financial or credit-risk columns" in extracted.status
-    assert "customer_ref" in extracted.warnings[-1]
+    assert len(extracted.frame) == 1
+    assert "No recognized" not in extracted.status
 
 
 def test_financial_customer_dataset_keeps_borrower_rows_for_existing_model_inputs():

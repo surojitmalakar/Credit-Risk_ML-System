@@ -18,6 +18,7 @@ from html import escape
 
 from msme_ews.data import FINANCIAL_COLUMNS, validate_financial_data
 from msme_ews.credit_assessment import apply_scenario_adjustments, generate_risk_interpretation
+from msme_ews.data_intelligence import analyze_dataset
 from msme_ews.demo import make_demo_data
 from msme_ews.documents import extract_financial_document
 from msme_ews.early_warning import early_warning_indicators, trend_data
@@ -32,7 +33,12 @@ from msme_ews.features import engineer_features
 from msme_ews.modeling import train_models
 from msme_ews.portfolio import analyze_credit_portfolio
 from msme_ews.prediction import DEFAULT_MODEL_PATH, predict_financial_health
-from msme_ews.reports import create_credit_assessment_pdf, create_excel_analysis
+from msme_ews.reports import (
+    create_credit_assessment_pdf,
+    create_data_intelligence_excel,
+    create_data_intelligence_pdf,
+    create_excel_analysis,
+)
 
 st.set_page_config(
     page_title="CREDIT RISK AI",
@@ -1268,74 +1274,110 @@ with selector_cols[2]:
         help="CSV, Excel workbooks, and text-based PDFs are processed locally. Scanned PDF images require OCR and are not supported.",
     )
 document_result = None
+data_intelligence = None
 if uploaded is not None:
     try:
-        with st.spinner("Extracting and normalizing financial statements locally..."):
+        with st.spinner("AI Data Detective is profiling the uploaded dataset locally..."):
             document_result = extract_financial_document(uploaded, uploaded.name)
-            detected_type = document_result.document_type.replace("_", " ").title()
-            if document_result.document_type == "unsupported":
-                st.error(
-                    "This file was read, but no usable financial or credit-risk data was found."
-                )
-                st.write(
-                    "Detected columns: "
-                    + (", ".join(document_result.detected_columns) or "None")
-                )
-                st.info(
-                    "For customer/loan analysis, include a customer or loan identifier plus a "
-                    "credit score, loan amount, or default/loan/risk status. For financial analysis, "
-                    "include numeric revenue/income, profit, assets, liabilities, or debt columns."
-                )
-                st.stop()
-            if document_result.document_type == "customer_loan_dataset":
-                credit_portfolio = analyze_credit_portfolio(document_result.frame)
-                financial_columns = [
-                    column for column in FINANCIAL_COLUMNS
-                    if column in document_result.frame
-                    and pd.to_numeric(document_result.frame[column], errors="coerce").notna().any()
-                ]
-                if not financial_columns:
-                    st.success(
-                        f"Document analysis: {document_result.status} "
-                        f"Detected type: {detected_type}. Format: {document_result.source_type}."
-                    )
-                    for warning in document_result.warnings:
-                        st.caption(warning)
-                    summary = credit_portfolio["summary"]
-                    st.subheader("Portfolio Risk Summary")
-                    metrics = st.columns(4)
-                    metrics[0].metric("Borrower / loan records", summary["record_count"])
-                    metrics[1].metric(
-                        "Observed default rate",
-                        f"{summary['observed_default_rate']:.1%}"
-                        if summary["observed_default_rate"] is not None
-                        else "Not available",
-                    )
-                    metrics[2].metric(
-                        "Average credit score",
-                        f"{summary['average_credit_score']:.0f}"
-                        if summary["average_credit_score"] is not None
-                        else "Not available",
-                    )
-                    metrics[3].metric(
-                        "Total loan amount",
-                        f"{summary['total_loan_amount']:,.2f}"
-                        if summary["total_loan_amount"] is not None
-                        else "Not available",
-                    )
-                    st.caption(
-                        f"Default status observed for {summary['observed_default_coverage']} of "
-                        f"{summary['record_count']} records. Customer risk bands are transparent "
-                        "indicators, not model-generated default probabilities."
-                    )
-                    st.subheader("Customer / Loan Risk Indicators")
-                    st.dataframe(credit_portfolio["customers"], width="stretch", hide_index=True)
-                    st.stop()
-            frame = validate_financial_data(document_result.frame)
+            data_intelligence = analyze_dataset(document_result.frame, uploaded.name)
+            financial_columns = [
+                column for column in FINANCIAL_COLUMNS
+                if column in document_result.frame
+                and pd.to_numeric(document_result.frame[column], errors="coerce").notna().any()
+            ]
         st.success(
-            f"Document analysis: {document_result.status} "
-            f"Detected type: {detected_type}. Format: {document_result.source_type}."
+            f"File successfully loaded. AI Data Detective completed. "
+            f"{document_result.status} Source: {document_result.source_type}."
         )
+        st.markdown("<div class='panel-header'><h3>AI Data Detective</h3></div>", unsafe_allow_html=True)
+        summary_cols = st.columns(5)
+        summary_cols[0].metric("Dataset type", data_intelligence["dataset_type"])
+        summary_cols[1].metric("Records", f"{len(document_result.frame):,}")
+        summary_cols[2].metric("Variables", f"{len(document_result.frame.columns):,}")
+        summary_cols[3].metric("Data quality", f"{data_intelligence['data_quality_percent']:.1f}%")
+        summary_cols[4].metric("Duplicates", f"{data_intelligence['duplicate_count']:,}")
+        st.caption(data_intelligence["executive_summary"])
+        with st.expander("Dataset profile and detected variables", expanded=not financial_columns):
+            st.dataframe(data_intelligence["profile"], width="stretch", hide_index=True)
+            if data_intelligence["identifiers"]:
+                st.caption("Potential identifiers: " + ", ".join(data_intelligence["identifiers"]))
+            if data_intelligence["targets"]:
+                st.caption("Potential target variables: " + ", ".join(data_intelligence["targets"]))
+            st.caption(
+                f"Numeric: {', '.join(data_intelligence['numeric_columns']) or 'none'} | "
+                f"Categorical: {', '.join(data_intelligence['categorical_columns']) or 'none'} | "
+                f"Date/time: {', '.join(data_intelligence['date_columns']) or 'none'}"
+            )
+        if data_intelligence["findings"]:
+            with st.expander("Detected intelligence and key patterns", expanded=not financial_columns):
+                for finding in data_intelligence["findings"]:
+                    st.write(f"- {finding}")
+                if not data_intelligence["correlations"].empty:
+                    st.dataframe(data_intelligence["correlations"], width="stretch", hide_index=True)
+                if not data_intelligence["statistics"].empty:
+                    st.dataframe(data_intelligence["statistics"], width="stretch", hide_index=True)
+                if not data_intelligence["categorical_summary"].empty:
+                    st.markdown("**Categorical distributions**")
+                    st.dataframe(data_intelligence["categorical_summary"], width="stretch", hide_index=True)
+                if not data_intelligence["target_distribution"].empty:
+                    st.markdown("**Observed target / outcome distribution**")
+                    st.dataframe(data_intelligence["target_distribution"], width="stretch", hide_index=True)
+                if not data_intelligence["high_risk_groups"].empty:
+                    st.markdown("**High-risk groups from observed target labels**")
+                    st.dataframe(data_intelligence["high_risk_groups"], width="stretch", hide_index=True)
+                if not data_intelligence["trends"].empty:
+                    st.markdown("**Observed trends**")
+                    st.dataframe(data_intelligence["trends"], width="stretch", hide_index=True)
+                if not data_intelligence["segments"].empty:
+                    st.markdown("**Exploratory numeric segments**")
+                    st.dataframe(data_intelligence["segments"], width="stretch", hide_index=True)
+                st.dataframe(data_intelligence["risk_results"].head(100), width="stretch", hide_index=True)
+                for column in data_intelligence["numeric_columns"][:3]:
+                    figure = px.histogram(
+                        data_intelligence["data"], x=column, nbins=24,
+                        title=f"Distribution: {column}",
+                        template="plotly_dark",
+                    )
+                    figure.update_layout(height=260, margin=dict(l=10, r=10, t=40, b=10), showlegend=False)
+                    st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+                model = data_intelligence["model"]
+                st.markdown("**Automatic model evaluation**")
+                st.write(model)
+                if not data_intelligence["concentration"].empty:
+                    st.dataframe(data_intelligence["concentration"], width="stretch", hide_index=True)
+                st.markdown("**Recommendations**")
+                for recommendation in data_intelligence["recommendations"]:
+                    st.write(f"- {recommendation}")
+                st.markdown("**Early warnings**")
+                for warning in data_intelligence["early_warnings"]:
+                    st.write(f"- {warning}")
+        report_pdf = create_data_intelligence_pdf(data_intelligence, uploaded.name)
+        report_excel = create_data_intelligence_excel(data_intelligence)
+        report_cols = st.columns(2)
+        with report_cols[0]:
+            st.download_button(
+                "Generate PDF Report",
+                data=report_pdf,
+                file_name=f"{Path(uploaded.name).stem}_data_intelligence.pdf",
+                mime="application/pdf",
+                key="data_intelligence_pdf",
+            )
+        with report_cols[1]:
+            st.download_button(
+                "Download Excel Analysis",
+                data=report_excel,
+                file_name=f"{Path(uploaded.name).stem}_data_intelligence.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="data_intelligence_excel",
+            )
+        if not financial_columns:
+            st.info(
+                "No canonical financial-statement fields were detected. "
+                "The dataset is still fully profiled; no financial-model probability is fabricated."
+            )
+            st.dataframe(document_result.frame.head(100), width="stretch", hide_index=True)
+            st.stop()
+        frame = validate_financial_data(document_result.frame)
         for warning in document_result.warnings:
             st.caption(warning)
         st.caption("Document contents are processed locally; verify extracted figures against the source statement.")
