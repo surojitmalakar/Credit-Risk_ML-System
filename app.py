@@ -19,11 +19,19 @@ from html import escape
 from msme_ews.data import validate_financial_data
 from msme_ews.credit_assessment import apply_scenario_adjustments, generate_risk_interpretation
 from msme_ews.demo import make_demo_data
+from msme_ews.documents import extract_financial_document
 from msme_ews.early_warning import early_warning_indicators, trend_data
 from msme_ews.explain import explain_prediction, global_importance
+from msme_ews.financial_analysis import (
+    analyze_financials,
+    has_sufficient_ml_data,
+    recommendations_for,
+    rule_based_assessment,
+)
 from msme_ews.features import engineer_features
 from msme_ews.modeling import train_models
 from msme_ews.prediction import DEFAULT_MODEL_PATH, predict_financial_health
+from msme_ews.reports import create_credit_assessment_pdf, create_excel_analysis
 
 st.set_page_config(
     page_title="CREDIT RISK AI",
@@ -33,7 +41,6 @@ st.set_page_config(
 )
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700;800&display=swap');
 :root {
     color-scheme: dark;
     --page:#07111F;
@@ -218,6 +225,18 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
 [data-testid="stFileUploader"] section *,
 [data-testid="stFileUploader"] [data-testid="stMarkdownContainer"] {
     color:var(--text) !important;
+}
+[data-testid="stFileChip"] {
+    background:var(--input) !important;
+    border:1px solid var(--input-border) !important;
+    color:var(--text) !important;
+}
+[data-testid="stFileChip"] [data-testid="stFileChipName"],
+[data-testid="stFileChip"] [data-testid="stFileChipDeleteBtn"] {
+    color:var(--text) !important;
+}
+[data-testid="stFileChip"] > div:first-of-type {
+    background:#26384D !important;
 }
 [data-testid="stFileUploader"] small,
 [data-testid="stFileUploader"] [data-testid="stCaptionContainer"] {
@@ -869,8 +888,9 @@ def render_warning_signals(active_signals: list[str]) -> None:
     st.markdown("<div class='panel-header'><h3>Early Warning Signals</h3></div>", unsafe_allow_html=True)
     if not active_signals:
         st.markdown(
-            "<div class='signal-item'><span class='signal-indicator healthy'></span>"
-            "<div><strong>Healthy</strong><span>No configured early-warning conditions are triggered.</span></div></div>",
+            "<div class='signal-item'><span class='signal-indicator'></span>"
+            "<div><strong>No active warning signals</strong>"
+            "<span>No configured condition was triggered by observed values; missing fields are not treated as healthy.</span></div></div>",
             unsafe_allow_html=True,
         )
         return
@@ -895,7 +915,7 @@ def render_credit_assessment_panel(company_name: str, result: dict, selected_fea
     leverage = feat.get("Debt_to_Assets", 0.0)
     sales_growth = feat.get("Sales_Growth", float("nan"))
     active_flags = set(flags.iloc[row_index][flags.iloc[row_index]].index.tolist())
-    health_score = max(0.0, min(100.0, (1 - float(result["distress_probability"])) * 100.0))
+    health_score = result.get("health_score")
 
     strengths = []
     if pd.notna(sales_growth) and float(sales_growth) > 0:
@@ -912,22 +932,45 @@ def render_credit_assessment_panel(company_name: str, result: dict, selected_fea
         risks.append("Increasing leverage")
 
     if not risks:
-        risks = ["Monitoring required on margin pressure"]
+        risks = ["No configured risk threshold was triggered by the available figures"]
     if not strengths:
-        strengths = ["Stable operating base"]
+        strengths = ["No strength could be confirmed from the available figures"]
 
-    priorities = [
-        "Monitor operating cash flow",
-        "Reduce leverage",
-        "Protect operating margins",
-    ]
+    priorities = []
+    if "Negative operating cash flow" in active_flags or (
+        pd.notna(cash_flow) and float(cash_flow) < 0
+    ):
+        priorities.append("Monitor operating cash flow")
+    if "Increasing leverage" in active_flags or (
+        pd.notna(leverage) and float(leverage) >= 0.65
+    ):
+        priorities.append("Reduce leverage")
+    if "Deteriorating margins" in active_flags or (
+        pd.notna(margin) and float(margin) < 0
+    ):
+        priorities.append("Protect operating margins")
+    if "Falling liquidity" in active_flags or (
+        pd.notna(current_ratio) and float(current_ratio) < 1
+    ):
+        priorities.append("Strengthen short-term liquidity")
+    if "Rapid revenue decline" in active_flags:
+        priorities.append("Investigate the revenue decline")
+    if not priorities:
+        priorities.append("Continue monitoring the financial indicators available in this statement")
 
     risk_label = result["risk_category"]
-    recommendation = (
-        "The company may be considered for credit subject to tighter monitoring and improved cash-flow generation."
-        if risk_label in {"Moderate Risk", "Low Risk"}
-        else "The company requires deeper credit review due to elevated distress indicators."
-    )
+    if result.get("method") == "Existing ML model":
+        recommendation = (
+            "The company may be considered for credit subject to tighter monitoring and improved cash-flow generation."
+            if risk_label in {"Moderate Risk", "Low Risk"}
+            else "The company requires deeper credit review due to elevated distress indicators."
+        )
+    else:
+        recommendation = (
+            "This is a sparse-data, rule-based assessment only. It does not determine credit eligibility; "
+            "review the observed indicators and obtain additional financial records."
+        )
+    displayed_health = f"{health_score:.0f}/100" if health_score is not None else "Not available"
 
     st.markdown(
         f"""
@@ -944,7 +987,7 @@ def render_credit_assessment_panel(company_name: str, result: dict, selected_fea
                 </div>
                 <div class="assessment-item">
                     <div class="assessment-label">Financial Health Score</div>
-                    <div class="assessment-value">{health_score:.0f}/100</div>
+                    <div class="assessment-value">{displayed_health}</div>
                 </div>
             </div>
             <div class="assessment-meta">
@@ -1020,7 +1063,8 @@ def build_credit_context(frame: pd.DataFrame, selected: pd.DataFrame, selected_f
     margin = float(feat.get("EBITDA_Margin", 0.0) or 0.0)
     coverage = float(feat.get("Interest_Coverage", 0.0) or 0.0)
     cash_flow = float(feat.get("Cash_Flow_Operations", 0.0) or 0.0)
-    health_score = max(0.0, min(100.0, (1 - float(result["distress_probability"])) * 100.0))
+    probability = result.get("distress_probability")
+    health_score = result.get("health_score")
     return {
         "company": company_id,
         "period": row.get("period", "latest identified period"),
@@ -1031,9 +1075,11 @@ def build_credit_context(frame: pd.DataFrame, selected: pd.DataFrame, selected_f
         "ebitda_margin": margin,
         "interest_coverage": coverage,
         "cash_flow_operations": cash_flow,
-        "default_probability": float(result["distress_probability"]),
+        "default_probability": float(probability) if probability is not None else None,
         "health_score": health_score,
         "risk_category": result["risk_category"],
+        "assessment_method": result.get("method", "Existing ML model"),
+        "coverage_label": result.get("coverage_label", "Coverage not available"),
         "warnings": active_flags,
         "top_risk": result.get("top_risk_factors", []),
         "protective": result.get("protective_factors", []),
@@ -1053,6 +1099,27 @@ def generate_credit_copilot_response(question: str, context: dict) -> str:
 
     if not q:
         q = "summarize the financial health"
+
+    if context.get("assessment_method") != "Existing ML model":
+        drivers = [
+            str(item.get("feature", ""))
+            for item in context.get("top_risk", [])
+            if item.get("feature")
+        ]
+        summary = (
+            f"This record has {context['coverage_label']} and was assessed with "
+            "transparent financial rules because the observed fields are not sufficient for the existing ML model. "
+        )
+        if risk_prob is None:
+            summary += "There is not enough numeric data to calculate a risk index."
+        else:
+            summary += f"The rule-based risk index is {risk_prob:.1%} and the category is {context['risk_category']}."
+        if drivers:
+            summary += f" Observed rule-based risk drivers include {', '.join(drivers[:3])}."
+        if warnings:
+            summary += f" Active early-warning indicators: {', '.join(warnings[:3])}."
+        summary += " This index is a heuristic, not a calibrated probability of default."
+        return summary
 
     if any(keyword in q for keyword in ["why", "risky", "risk", "risk factors", "biggest risk"]):
         reasons = []
@@ -1193,15 +1260,26 @@ st.markdown(
 )
 selector_cols = st.columns([1.25, 1, 1.2])
 with selector_cols[2]:
-    uploaded = st.file_uploader("Upload financial CSV", type="csv", key="financial_csv_upload")
+    uploaded = st.file_uploader(
+        "Upload financial statement",
+        type=["csv", "xlsx", "xls", "pdf"],
+        key="financial_csv_upload",
+        help="CSV, Excel workbooks, and text-based PDFs are processed locally. Scanned PDF images require OCR and are not supported.",
+    )
+document_result = None
 if uploaded is not None:
     try:
-        frame = validate_financial_data(pd.read_csv(uploaded))
-        st.caption("Using uploaded data. Validate its provenance and target definition.")
+        with st.spinner("Extracting and normalizing financial statements locally..."):
+            document_result = extract_financial_document(uploaded, uploaded.name)
+            frame = validate_financial_data(document_result.frame)
+        st.success(f"Document analysis: {document_result.status} Format: {document_result.source_type}.")
+        for warning in document_result.warnings:
+            st.caption(warning)
+        st.caption("Document contents are processed locally; verify extracted figures against the source statement.")
         is_demo = False
     except Exception as error:
-        st.error(str(error))
-        frame, is_demo = make_demo_data(), True
+        st.error(f"Document analysis failed: {error}")
+        st.stop()
 else:
     frame, is_demo = make_demo_data(), True
     st.caption("Using synthetic illustrative demo data.")
@@ -1238,6 +1316,41 @@ with selector_cols[1]:
     )
 
 selected, selected_features = frame.iloc[[row_index]], features.iloc[[row_index]]
+financial_analysis = analyze_financials(frame, row_index)
+active_warning_signals = flags.iloc[row_index][flags.iloc[row_index]].index.tolist()
+recommendations = recommendations_for(
+    frame.iloc[row_index],
+    financial_analysis,
+    active_warning_signals,
+)
+model_available_for_record = has_sufficient_ml_data(frame, row_index)
+
+
+def selected_assessment() -> dict:
+    if model_available_for_record:
+        result = predict_financial_health(selected, bundle=bundle, include_explanations=False)
+        result["method"] = "Existing ML model"
+        result["health_score"] = max(
+            0.0,
+            min(100.0, (1 - float(result["distress_probability"])) * 100.0),
+        )
+    else:
+        result = rule_based_assessment(frame, row_index, financial_analysis)
+        probability = result["distress_probability"]
+        result["health_score"] = (
+            max(0.0, min(100.0, (1 - probability) * 100.0))
+            if probability is not None
+            else None
+        )
+    result["coverage_percent"] = financial_analysis["coverage_percent"]
+    result["coverage_label"] = (
+        f"{financial_analysis['coverage_count']}/{financial_analysis['coverage_total']} "
+        f"core fields ({financial_analysis['coverage_percent']:.0f}%)"
+    )
+    return result
+
+
+current_assessment = selected_assessment()
 
 
 def page_header(title: str, subtitle: str) -> None:
@@ -1251,9 +1364,16 @@ def disclaimer() -> None:
 
 
 def show_risk() -> dict:
-    result = predict_financial_health(selected, bundle=bundle)
+    result = current_assessment
     left, middle, right = st.columns(3)
-    left.metric("Estimated distress probability", f"{result['distress_probability']:.1%}")
+    risk_value = result.get("distress_probability")
+    risk_label = (
+        f"{risk_value:.1%}" if risk_value is not None else "Insufficient data"
+    )
+    left.metric(
+        "Estimated distress probability" if model_available_for_record else "Rule-based risk index",
+        risk_label,
+    )
     risk_class = _state_color(result["risk_category"])
     middle.markdown(
         f"<div class='risk-category-card' role='group' aria-label='Risk category: "
@@ -1261,7 +1381,10 @@ def show_risk() -> dict:
         f"<div class='risk-category-value {risk_class}'>{result['risk_category']}</div></div>",
         unsafe_allow_html=True,
     )
-    right.metric("Confidence indicator", f"{result['confidence_indicator']:.0%}")
+    right.metric(
+        "Model confidence indicator" if model_available_for_record else "Data coverage",
+        f"{result['confidence_indicator']:.0%}",
+    )
     st.caption(result["confidence_note"])
     disclaimer()
     return result
@@ -1269,9 +1392,8 @@ def show_risk() -> dict:
 
 if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit Assessment"}:
     is_overview = page == "Executive Overview"
-    result = predict_financial_health(selected, bundle=bundle, include_explanations=False)
-    active_warning_signals = flags.iloc[row_index][flags.iloc[row_index]].index.tolist()
-    if page in {"Executive Overview", "AI Copilot"}:
+    result = current_assessment
+    if model_available_for_record and page in {"Executive Overview", "AI Copilot"}:
         try:
             local_explanation = explain_prediction(bundle, selected)
             result["top_risk_factors"] = local_explanation["risk_factors"]
@@ -1279,7 +1401,7 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
         except Exception as error:
             st.warning(f"SHAP risk drivers are unavailable for this record: {error}")
     company_name = str(frame.iloc[row_index].get("company_id", "Selected Company"))
-    health_score = max(0.0, min(100.0, (1 - result["distress_probability"]) * 100.0))
+    health_score = result.get("health_score")
     current_ratio = selected_features.iloc[0].get("Current_Ratio", float("nan"))
     risk_class = _state_color(result["risk_category"])
     if is_overview:
@@ -1290,12 +1412,27 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
             if current_ratio >= 1
             else "watch"
         )
-        health_label = "Strong" if health_score >= 70 else "Watch" if health_score >= 40 else "Critical"
+        health_label = (
+            "Strong" if health_score >= 70
+            else "Watch" if health_score >= 40
+            else "Critical"
+        ) if health_score is not None else "Insufficient data"
         metric_cols = st.columns(4)
         with metric_cols[0]:
-            render_kpi_card("Financial Health", f"{health_score:.0f}/100", health_label, risk_class)
+            render_kpi_card(
+                "Financial Health",
+                f"{health_score:.0f}/100" if health_score is not None else "N/A",
+                health_label if health_score is not None else "Insufficient data",
+                risk_class,
+            )
         with metric_cols[1]:
-            render_kpi_card("Default Risk", f"{result['distress_probability']:.1%}", result["risk_category"], risk_class)
+            probability = result.get("distress_probability")
+            render_kpi_card(
+                "Default Risk" if model_available_for_record else "Rule-Based Risk Index",
+                f"{probability:.1%}" if probability is not None else "N/A",
+                result["risk_category"],
+                risk_class,
+            )
         with metric_cols[2]:
             render_kpi_card(
                 "Current Ratio",
@@ -1304,7 +1441,32 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
                 ratio_state,
             )
         with metric_cols[3]:
-            render_kpi_card("AI Risk Status", result["risk_category"].upper(), "Stable" if risk_class == "healthy" else result["risk_category"], risk_class)
+            render_kpi_card(
+                "AI Risk Status" if model_available_for_record else "Risk Status",
+                result["risk_category"].upper(),
+                "Stable" if risk_class == "healthy" else result["risk_category"],
+                risk_class,
+            )
+
+        if not model_available_for_record and page in {"Executive Overview", "Credit Assessment"}:
+            st.info(
+                "The selected record does not contain enough observed financial fields for the ML model. "
+                "This assessment uses transparent rules and is not a calibrated probability of default."
+            )
+        if uploaded is not None:
+            st.markdown("<div class='panel-header'><h3>Extracted Financial Data</h3></div>", unsafe_allow_html=True)
+            st.caption(
+                f"Data coverage: {current_assessment['coverage_label']}. "
+                f"Company: {company_name}; period: "
+                f"{selected.iloc[0].get('period') if pd.notna(selected.iloc[0].get('period')) else 'Not identified'}."
+            )
+            st.dataframe(selected, width="stretch", hide_index=True)
+            st.markdown("<div class='panel-header'><h3>Financial Ratios</h3></div>", unsafe_allow_html=True)
+            ratios_frame = pd.DataFrame(
+                [{"Ratio": label, "Value": value if value is not None else "Not available"}
+                 for label, value in financial_analysis["ratios"].items()]
+            ).astype({"Value": "string"})
+            st.dataframe(ratios_frame, width="stretch", hide_index=True)
 
     if page == "Credit Assessment":
         render_credit_assessment_panel(company_name, result, selected_features, flags, row_index)
@@ -1331,7 +1493,7 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
         response_signature = (
             str(selected_company),
             row_index,
-            float(result["distress_probability"]),
+            float(result["distress_probability"] or 0.0),
             uploaded.name if uploaded is not None else "synthetic-demo",
             uploaded.size if uploaded is not None else 0,
             question,
@@ -1347,15 +1509,84 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
             )
 
     if page in {"Executive Overview", "AI Copilot"}:
-        render_ai_risk_interpretation(result, selected_features.iloc[0], active_warning_signals)
+        if model_available_for_record:
+            render_ai_risk_interpretation(result, selected_features.iloc[0], active_warning_signals)
+        else:
+            st.markdown("<div class='panel-header'><h3>Risk Assessment Summary</h3></div>", unsafe_allow_html=True)
+            risks = [factor["feature"] for factor in result.get("top_risk_factors", [])]
+            coverage_pct = financial_analysis["coverage_percent"]
+            explanation = (
+                f"Observed financial data coverage is {coverage_pct:.0f}%. "
+                f"The transparent rules classify this record as {result['risk_category'].lower()}."
+            )
+            if risks:
+                explanation += f" Risk drivers supported by available figures include {', '.join(risks[:3])}."
+            st.markdown(
+                f"<div class='risk-summary-card {_state_color(result['risk_category'])}'>"
+                f"<div class='risk-state'>{escape(result['risk_category'].upper())}</div>"
+                f"<p>{escape(explanation)}</p>"
+                f"<strong>{escape(result['method'])}</strong></div>",
+                unsafe_allow_html=True,
+            )
+
+    if is_overview or page == "Credit Assessment":
+        st.markdown("<div class='panel-header'><h3>Recommendations</h3></div>", unsafe_allow_html=True)
+        for recommendation in recommendations:
+            st.write(f"- {recommendation}")
+        pdf_bytes = create_credit_assessment_pdf(
+            company_name,
+            selected,
+            financial_analysis,
+            result,
+            active_warning_signals,
+            recommendations,
+        )
+        excel_bytes = create_excel_analysis(
+            frame.iloc[company_rows] if uploaded is not None else selected,
+            financial_analysis,
+            result,
+            active_warning_signals,
+            recommendations,
+        )
+        report_cols = st.columns(2)
+        with report_cols[0]:
+            st.download_button(
+                "Generate Credit Assessment PDF",
+                data=pdf_bytes,
+                file_name=f"{company_name.replace(' ', '_')}_credit_assessment.pdf",
+                mime="application/pdf",
+                key="credit_assessment_pdf",
+                width="stretch",
+            )
+        with report_cols[1]:
+            st.download_button(
+                "Download Excel Analysis",
+                data=excel_bytes,
+                file_name=f"{company_name.replace(' ', '_')}_financial_analysis.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="financial_analysis_xlsx",
+                width="stretch",
+            )
 
     if is_overview or page == "AI Copilot":
         st.markdown("<div class='panel-header'><h3>Top Risk Drivers</h3></div>", unsafe_allow_html=True)
-        st.markdown(
-            "<div class='driver-legend'>Positive contribution increases distress output · Negative contribution reduces it</div>",
-            unsafe_allow_html=True,
-        )
-        render_shap_drivers(result)
+        if model_available_for_record:
+            st.markdown(
+                "<div class='driver-legend'>Positive contribution increases distress output · Negative contribution reduces it</div>",
+                unsafe_allow_html=True,
+            )
+            render_shap_drivers(result)
+        elif result.get("top_risk_factors"):
+            st.caption("Rule-based indicators are derived from observed values and transparent thresholds; they are not SHAP contributions.")
+            st.dataframe(
+                pd.DataFrame(result["top_risk_factors"]).rename(
+                    columns={"feature": "Observed risk driver", "contribution": "Rule weight"}
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+        else:
+            st.info("No risk driver could be calculated from the available fields.")
 
     if page == "Scenario Simulator":
         page_header("Scenario Simulator", "Explore how adjusted financial assumptions change the model's estimate.")
@@ -1378,37 +1609,66 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
                     operating_margin_change=margin_change / 100,
                     debt_change=debt_change / 100,
                 )
-                scenario_result = predict_financial_health(
-                    scenario_data,
-                    bundle=bundle,
-                    include_explanations=False,
-                )
+                scenario_analysis = analyze_financials(scenario_data, 0)
+                if model_available_for_record:
+                    scenario_result = predict_financial_health(
+                        scenario_data,
+                        bundle=bundle,
+                        include_explanations=False,
+                    )
+                    scenario_result["method"] = "Existing ML model"
+                    scenario_result["health_score"] = (
+                        1 - scenario_result["distress_probability"]
+                    ) * 100
+                else:
+                    scenario_result = rule_based_assessment(
+                        scenario_data,
+                        0,
+                        scenario_analysis,
+                    )
+                    if scenario_result["distress_probability"] is not None:
+                        scenario_result["health_score"] = (
+                            1 - scenario_result["distress_probability"]
+                        ) * 100
                 scenario_features = engineer_features(scenario_data).iloc[0]
                 scenario_warnings = early_warning_indicators(scenario_data).iloc[0]
                 scenario_signals = scenario_warnings[scenario_warnings].index.tolist()
-                try:
-                    scenario_explanation = explain_prediction(bundle, scenario_data)
-                    scenario_result["top_risk_factors"] = scenario_explanation["risk_factors"]
-                    scenario_result["protective_factors"] = scenario_explanation["protective_factors"]
-                except Exception as error:
-                    st.warning(f"SHAP scenario drivers are unavailable: {error}")
+                if model_available_for_record:
+                    try:
+                        scenario_explanation = explain_prediction(bundle, scenario_data)
+                        scenario_result["top_risk_factors"] = scenario_explanation["risk_factors"]
+                        scenario_result["protective_factors"] = scenario_explanation["protective_factors"]
+                    except Exception as error:
+                        st.warning(f"SHAP scenario drivers are unavailable: {error}")
 
                 probability_change_pp = (
-                    scenario_result["distress_probability"] - result["distress_probability"]
-                ) * 100
+                    (scenario_result["distress_probability"] - result["distress_probability"]) * 100
+                    if scenario_result.get("distress_probability") is not None
+                    and result.get("distress_probability") is not None
+                    else None
+                )
                 scenario_metric, scenario_status = st.columns(2)
                 scenario_metric.metric(
-                    "Projected risk",
-                    f"{scenario_result['distress_probability']:.1%}",
-                    delta=f"{probability_change_pp:+.1f} percentage points",
+                    "Projected risk" if model_available_for_record else "Projected rule-based risk index",
+                    f"{scenario_result['distress_probability']:.1%}" if scenario_result.get("distress_probability") is not None else "Insufficient data",
+                    delta=f"{probability_change_pp:+.1f} percentage points" if probability_change_pp is not None else None,
                     delta_color="inverse",
                 )
-                scenario_status.metric("Current risk", f"{result['distress_probability']:.1%}")
-                render_ai_risk_interpretation(
-                    scenario_result,
-                    scenario_features,
-                    scenario_signals,
+                scenario_status.metric(
+                    "Current risk" if model_available_for_record else "Current rule-based risk index",
+                    f"{result['distress_probability']:.1%}" if result.get("distress_probability") is not None else "Insufficient data",
                 )
+                if model_available_for_record:
+                    render_ai_risk_interpretation(
+                        scenario_result,
+                        scenario_features,
+                        scenario_signals,
+                    )
+                else:
+                    st.info(
+                        "Scenario results use the same transparent rules as the current sparse-data assessment; "
+                        "they are not calibrated default probabilities."
+                    )
                 st.caption(
                     f"Applied assumptions: revenue {revenue_change:+d}%, "
                     f"operating margin {margin_change:+d} percentage points, "
@@ -1466,43 +1726,62 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
         disclaimer()
 
 elif page == "MSME Financial Health":
-    page_header("MSME Financial Health", "Statement inputs and derived ratios for the selected company-period.")
+    page_header("MSME Financial Health", "Extracted statement inputs, available-data coverage, and derived ratios.")
     financial_summary = pd.concat(
         [selected.reset_index(drop=True), selected_features.reset_index(drop=True)],
         axis=1,
     ).T.rename(columns={0: "Value"}).astype(str)
     st.dataframe(financial_summary, width="stretch")
+    st.caption(f"Core-field coverage: {current_assessment['coverage_label']}")
+    st.dataframe(
+        pd.DataFrame(
+            [{"Ratio": label, "Value": value if value is not None else "Not available"}
+             for label, value in financial_analysis["ratios"].items()]
+        ).astype({"Value": "string"}),
+        width="stretch",
+        hide_index=True,
+    )
     st.caption("Ratios use bounded calculations; zero denominators are treated as missing. Inventory days use a revenue proxy when COGS is unavailable.")
     disclaimer()
 
 elif page == "Risk Prediction":
-    page_header("Risk Prediction", "Estimated probability, category, and the factors behind this model score.")
+    page_header(
+        "Risk Prediction",
+        "Estimated probability, category, and the factors behind this assessment.",
+    )
     result = show_risk()
-    health_score = (1 - result["distress_probability"]) * 100
-    gauge = go.Figure(go.Indicator(
-        mode="gauge+number",
-        value=health_score,
-        number={"suffix": "%", "font": {"color": "#F8FAFC", "size": 42}},
-        title={"text": "Estimated financial health", "font": {"color": "#F8FAFC", "size": 18}},
-        gauge={
-            "axis": {"range": [0, 100], "ticksuffix": "%", "tickcolor": "#94A3B8"},
-            "bar": {"color": "#10B981", "thickness": 0.25},
-            "bgcolor": "#0D1B2A",
-            "borderwidth": 0,
-            "steps": [
-                {"range": [0, 40], "color": "rgba(239, 68, 68, 0.18)"},
-                {"range": [40, 70], "color": "rgba(245, 158, 11, 0.18)"},
-                {"range": [70, 100], "color": "rgba(16, 185, 129, 0.18)"},
-            ],
-            "threshold": {
-                "line": {"color": "#F8FAFC", "width": 3},
-                "thickness": 0.8,
-                "value": health_score,
+    health_score = result.get("health_score")
+    if health_score is None:
+        st.info("There is not enough numeric financial data to calculate a health score.")
+    else:
+        gauge = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=health_score,
+            number={"suffix": "%", "font": {"color": "#F8FAFC", "size": 42}},
+            title={"text": "Financial health score", "font": {"color": "#F8FAFC", "size": 18}},
+            gauge={
+                "axis": {"range": [0, 100], "ticksuffix": "%", "tickcolor": "#94A3B8"},
+                "bar": {"color": "#10B981", "thickness": 0.25},
+                "bgcolor": "#0D1B2A",
+                "borderwidth": 0,
+                "steps": [
+                    {"range": [0, 40], "color": "rgba(239, 68, 68, 0.18)"},
+                    {"range": [40, 70], "color": "rgba(245, 158, 11, 0.18)"},
+                    {"range": [70, 100], "color": "rgba(16, 185, 129, 0.18)"},
+                ],
+                "threshold": {
+                    "line": {"color": "#F8FAFC", "width": 3},
+                    "thickness": 0.8,
+                    "value": health_score,
+                },
             },
-        },
-    ))
-    render_chart(gauge, height=290, margin={"t": 42, "b": 12, "l": 12, "r": 12})
-    st.caption("Health score is calculated as 100% minus the model's estimated distress probability; it is not a separate diagnosis.")
+        ))
+        render_chart(gauge, height=290, margin={"t": 42, "b": 12, "l": 12, "r": 12})
+    st.caption(
+        "Rule-based assessments are transparent heuristic indices, not calibrated probabilities of default."
+        if not model_available_for_record
+        else "Health score is calculated as 100% minus the model's estimated distress probability; it is not a separate diagnosis."
+    )
     risk, protective = st.columns(2)
     with risk:
         st.subheader("Risk-increasing factors")
@@ -1513,47 +1792,76 @@ elif page == "Risk Prediction":
 
 elif page == "Explainable AI":
     page_header("Explainable AI", "How the selected model behaves globally and for this individual record.")
-    try:
-        local = explain_prediction(bundle, selected)
-        st.subheader("Why did the model assign this risk?")
-        st.caption("Positive SHAP contributions increase the model output for distress; negative contributions reduce it. Associations are not causal.")
-        bars = local["contributions"].copy()
-        bars["direction"] = bars["shap_value"].map(lambda value: "Risk increased" if value > 0 else "Risk reduced")
-        fig = px.bar(
-            bars.sort_values("shap_value"),
-            x="shap_value",
-            y="feature",
-            color="direction",
-            orientation="h",
-            color_discrete_map={"Risk increased": "#EF4444", "Risk reduced": "#2563EB"},
-            title="Individual SHAP contributions",
-        )
-        fig.update_layout(
-            legend_title_text="Contribution",
-            xaxis_title="Contribution to distress score",
-            yaxis_title=None,
-        )
-        render_chart(fig, height=400, margin={"t": 58, "r": 12, "b": 52, "l": 120})
-        importance = global_importance(bundle, frame)
-        global_fig = px.bar(
-            importance.head(15).sort_values("mean_abs_shap"),
-            x="mean_abs_shap",
-            y="feature",
-            orientation="h",
-            title="Global feature importance · mean absolute SHAP",
-            color_discrete_sequence=["#3B82F6"],
-        )
-        render_chart(global_fig, height=400, margin={"t": 58, "r": 12, "b": 48, "l": 120})
-    except Exception as error:
-        st.error(f"SHAP explanation could not be calculated in this environment: {error}")
+    if not model_available_for_record:
+        st.info("There are not enough observed financial fields for model-based SHAP. The available rule-based drivers are shown instead.")
+        if current_assessment.get("top_risk_factors"):
+            st.dataframe(
+                pd.DataFrame(current_assessment["top_risk_factors"]).rename(
+                    columns={"feature": "Observed risk driver", "contribution": "Rule weight"}
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+        else:
+            st.info("No rule-based risk drivers were triggered by the available values.")
+    else:
+        try:
+            local = explain_prediction(bundle, selected)
+            st.subheader("Why did the model assign this risk?")
+            st.caption("Positive SHAP contributions increase the model output for distress; negative contributions reduce it. Associations are not causal.")
+            bars = local["contributions"].copy()
+            bars["direction"] = bars["shap_value"].map(lambda value: "Risk increased" if value > 0 else "Risk reduced")
+            fig = px.bar(
+                bars.sort_values("shap_value"),
+                x="shap_value",
+                y="feature",
+                color="direction",
+                orientation="h",
+                color_discrete_map={"Risk increased": "#EF4444", "Risk reduced": "#2563EB"},
+                title="Individual SHAP contributions",
+            )
+            fig.update_layout(
+                legend_title_text="Contribution",
+                xaxis_title="Contribution to distress score",
+                yaxis_title=None,
+            )
+            render_chart(fig, height=400, margin={"t": 58, "r": 12, "b": 52, "l": 120})
+            importance = global_importance(bundle, frame)
+            global_fig = px.bar(
+                importance.head(15).sort_values("mean_abs_shap"),
+                x="mean_abs_shap",
+                y="feature",
+                orientation="h",
+                title="Global feature importance · mean absolute SHAP",
+                color_discrete_sequence=["#3B82F6"],
+            )
+            render_chart(global_fig, height=400, margin={"t": 58, "r": 12, "b": 48, "l": 120})
+        except Exception as error:
+            st.error(f"SHAP explanation could not be calculated in this environment: {error}")
     disclaimer()
 
 elif page == "Early-Warning Indicators":
     page_header("Early-Warning Indicators", "Transparent heuristics that flag potentially deteriorating conditions.")
     st.caption("Rules are configurable research heuristics, not learned predictions or universal thresholds.")
     selected_flags = flags.iloc[[row_index]].T.rename(columns={row_index: "Triggered"})
-    selected_flags["Status"] = selected_flags["Triggered"].map({True: "Review", False: "Not triggered"})
+    feature_row = selected_features.iloc[0]
+    warning_requirements = {
+        "Rapid revenue decline": ("Sales_Growth",),
+        "Increasing leverage": ("Debt_to_Assets",),
+        "Falling liquidity": ("Current_Ratio",),
+        "Deteriorating margins": ("EBITDA_Margin", "Net_Profit_Margin"),
+        "Negative operating cash flow": ("Cash_Flow_Operations",),
+        "Increasing receivable days": ("Receivable_Days",),
+        "Falling interest coverage": ("Interest_Coverage",),
+    }
+    selected_flags["Status"] = [
+        "Review" if bool(triggered)
+        else "Not triggered" if any(pd.notna(feature_row.get(name)) for name in warning_requirements.get(signal, ()))
+        else "Not assessed"
+        for signal, triggered in selected_flags["Triggered"].items()
+    ]
     st.dataframe(selected_flags.drop(columns="Triggered"), width="stretch")
+    st.caption(f"Core-field coverage: {current_assessment['coverage_label']}")
     if "company_id" in frame and "period" in frame:
         series = trend_data(frame, selected.iloc[0]["company_id"])
         if len(series) > 1:
@@ -1603,16 +1911,41 @@ elif page == "Methodology":
     st.write("The score is not causal, calibrated uncertainty, a guaranteed prediction, lending advice, or a decision engine. Validate definitions, data rights, external and temporal performance, subgroup behavior, and calibration with qualified reviewers before any consequential use. Provide human oversight and recourse.")
     st.subheader("Feature definitions")
     st.dataframe(pd.DataFrame({"Feature": features.columns, "Definition": ["Raw numeric statement field" if name in frame.columns else "Engineered ratio; see project README" for name in features.columns]}), width="stretch", hide_index=True)
+    st.subheader("Sparse-data risk index")
+    st.write(
+        "When fewer than four financial fields are observed, or fewer than two model-core fields are present, "
+        "the app uses an uncalibrated rule-based index instead of the ML model. It starts at 10 index points; "
+        "observed liquidity, leverage, profitability, coverage, growth, and cash-flow signals adjust the index, "
+        "observed strengths can reduce it, and the result is bounded between 5 and 95 index points. "
+        "The output is not a default probability."
+    )
+    st.dataframe(
+        pd.DataFrame([
+            {"Observed condition": "Current ratio below 1.0x", "Index adjustment": "+22 points"},
+            {"Observed condition": "Current ratio below 1.2x", "Index adjustment": "+10 points"},
+            {"Observed condition": "Debt / equity above 2.0x", "Index adjustment": "+16 points"},
+            {"Observed condition": "Negative equity", "Index adjustment": "+20 points"},
+            {"Observed condition": "Debt / assets at least 0.65x", "Index adjustment": "+18 points"},
+            {"Observed condition": "Negative net profit margin", "Index adjustment": "+15 points"},
+            {"Observed condition": "Negative return on assets", "Index adjustment": "+10 points"},
+            {"Observed condition": "Interest coverage below 1.5x", "Index adjustment": "+12 points"},
+            {"Observed condition": "Revenue growth below -15%", "Index adjustment": "+12 points"},
+            {"Observed condition": "Negative operating cash flow", "Index adjustment": "+15 points"},
+            {"Observed condition": "Observed strengths", "Index adjustment": "Up to -20 points"},
+        ]),
+        width="stretch",
+        hide_index=True,
+    )
     disclaimer()
 
 elif page == "About":
     page_header("About Surojit Malakar", "Finance, research, operations, and technology in service of practical impact.")
     photo_column, intro_column = st.columns([1, 2], gap="large")
     with photo_column:
-        st.image(
-            "https://github.com/surojitmalakar.png?size=440",
-            caption="Surojit Malakar",
-            width=220,
+        st.markdown(
+            "<div class='assessment-card'><div class='eyebrow'>CREDIT RISK AI</div>"
+            "<h3>Surojit Malakar</h3><p>SkillseED India</p></div>",
+            unsafe_allow_html=True,
         )
     with intro_column:
         st.subheader("A little about me")
