@@ -1,0 +1,570 @@
+"""Eight-page Streamlit research dashboard for MSME financial distress."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT / "src"))
+
+import joblib
+ source /workspaces/Credit-Risk_ML-System/.venv/bin/activate
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
+
+from msme_ews.data import validate_financial_data
+from msme_ews.demo import make_demo_data
+from msme_ews.early_warning import early_warning_indicators, trend_data
+from msme_ews.explain import explain_prediction, global_importance
+from msme_ews.features import engineer_features
+from msme_ews.modeling import train_models
+from msme_ews.prediction import DEFAULT_MODEL_PATH, predict_financial_health
+
+st.set_page_config(
+    page_title="MSME Financial Early Warning",
+    page_icon="◈",
+    layout="wide",
+    initial_sidebar_state="auto",
+)
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap');
+:root {
+    color-scheme: light;
+    --page:#F8FAFC;
+    --sidebar:#0F172A;
+    --primary:#2563EB;
+    --blue:#3B82F6;
+    --healthy:#10B981;
+    --warning:#F59E0B;
+    --danger:#EF4444;
+    --ink:#0F172A;
+    --muted:#64748B;
+    --border:#E2E8F0;
+    --card:#FFFFFF;
+}
+html, body, [class*="css"] { font-family:'Manrope',sans-serif; color:var(--ink); }
+html, body { width:100%; max-width:100%; overflow-x:hidden; }
+.stApp, [data-testid="stAppViewContainer"] { background:var(--page); }
+h1, h2, h3, h4, h5, h6 { color:var(--ink) !important; letter-spacing:-.02em; }
+p, li, label, legend, small, [data-testid="stCaptionContainer"],
+[data-testid="stWidgetLabel"], [data-testid="stMarkdownContainer"],
+[data-testid="stMetricLabel"], [data-testid="stMetricValue"],
+[data-testid="stMetricDelta"], [data-testid="stMarkdownContainer"] *,
+[data-testid="stWidgetLabel"] * { color:var(--ink) !important; }
+[data-testid="stCaptionContainer"], .stCaption { color:var(--muted) !important; }
+[data-testid="stMainBlockContainer"] { max-width:100%; padding-top:2rem; padding-bottom:3rem; }
+[data-testid="stMetric"], [data-testid="stDataFrame"], [data-testid="stTable"],
+[data-testid="stPlotlyChart"], [data-testid="stVerticalBlockBorderWrapper"] {
+    min-width:0;
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:12px;
+}
+[data-testid="stMetric"] { padding:16px; }
+[data-testid="stMetricLabel"] { color:var(--muted) !important; }
+[data-testid="stMetricValue"] { color:var(--ink) !important; }
+[data-testid="stDataFrame"], [data-testid="stTable"] { max-width:100%; overflow-x:auto; }
+[data-testid="stPlotlyChart"] { max-width:100%; overflow:hidden; }
+[data-testid="stSidebar"], [data-testid="stSidebarContent"] {
+    background:var(--sidebar) !important;
+    border-right:1px solid #1E293B;
+}
+[data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3, [data-testid="stSidebar"] h4,
+[data-testid="stSidebar"] h5, [data-testid="stSidebar"] h6,
+[data-testid="stSidebar"] p, [data-testid="stSidebar"] small,
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"],
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
+    color:#FFFFFF !important;
+}
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] { color:#CBD5E1 !important; }
+[data-testid="stSidebar"] .eyebrow { color:#CBD5E1 !important; }
+[data-testid="stSidebar"] [data-testid="stRadio"] label {
+    color:#CBD5E1 !important;
+    border-radius:8px;
+    padding:.45rem .6rem;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {
+    background:var(--primary);
+    color:#FFFFFF !important;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) * {
+    color:#FFFFFF !important;
+}
+[data-testid="stSidebar"] [data-baseweb="select"] > div,
+[data-testid="stSidebar"] [data-testid="stFileUploader"] section {
+    background:#1E293B;
+    border-color:#475569;
+    color:#FFFFFF;
+}
+[data-testid="stSidebar"] [data-baseweb="select"] *,
+[data-testid="stSidebar"] [data-testid="stFileUploader"] * {
+    color:#F8FAFC !important;
+}
+[data-testid="stSidebar"] [data-testid="stFileUploader"] section {
+    border:1px dashed #64748B;
+    border-radius:8px;
+}
+[data-testid="stSidebar"] [data-testid="stFileUploader"] button {
+    background:#334155 !important;
+    border-color:#64748B !important;
+    color:#FFFFFF !important;
+}
+.eyebrow { font:600 11px 'DM Mono',monospace; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; }
+.risk-note {
+    border:1px solid #FECACA;
+    border-left:4px solid var(--danger);
+    border-radius:12px;
+    padding:16px;
+    background:#FEF2F2;
+    color:#7F1D1D;
+}
+.risk-category-card {
+    min-height:100%;
+    padding:16px;
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:12px;
+}
+.risk-category-label { color:var(--muted) !important; font-size:.875rem; }
+.risk-category-value {
+    display:inline-block;
+    margin-top:.45rem;
+    padding:.25rem .65rem;
+    border-radius:999px;
+    font-size:1.25rem;
+    font-weight:700;
+}
+.risk-category-value.healthy { background:#D1FAE5; color:#065F46 !important; }
+.risk-category-value.warning { background:#FEF3C7; color:#78350F !important; }
+.risk-category-value.danger { background:#FEE2E2; color:#991B1B !important; }
+.risk-category-value.neutral { background:#E2E8F0; color:#0F172A !important; }
+.stApp button, .stApp [role="button"] {
+    min-height:44px;
+    color:var(--ink) !important;
+    border-color:var(--border) !important;
+}
+.stApp [data-testid="stDownloadButton"] button,
+.stApp [data-testid="stFormSubmitButton"] button {
+    background:var(--primary);
+    border-color:var(--primary);
+    color:#FFFFFF !important;
+}
+.stApp input, .stApp textarea, .stApp [data-baseweb="select"] * { color:var(--ink); }
+.stApp [data-testid="stImage"] img { max-width:100%; height:auto; object-fit:contain; }
+[data-testid="stAlert"] { border-radius:12px; }
+[data-testid="stAlert"] p { color:var(--ink) !important; }
+@media (max-width: 767px) {
+    html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"],
+    [data-testid="stMainBlockContainer"] {
+        width:100%;
+        max-width:100%;
+        min-width:0;
+        overflow-x:hidden;
+    }
+    [data-testid="stMainBlockContainer"] {
+        padding:1rem clamp(12px, 4vw, 18px) 2rem;
+    }
+    [data-testid="stHorizontalBlock"] {
+        flex-wrap:wrap;
+        gap:.65rem;
+        min-width:0;
+    }
+    [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+        flex:1 1 100% !important;
+        width:100% !important;
+        min-width:0 !important;
+    }
+    [data-testid="stSidebar"][aria-expanded="true"] {
+        width:min(86vw, 20rem) !important;
+        min-width:min(86vw, 20rem) !important;
+        max-width:86vw !important;
+    }
+    [data-testid="stMetric"] { width:100%; padding:14px; }
+    [data-testid="stDataFrame"], [data-testid="stTable"] {
+        max-width:100%;
+        overflow-x:auto;
+    }
+    [data-testid="stPlotlyChart"], [data-testid="stImage"],
+    [data-testid="stFileUploader"], [data-baseweb="select"] {
+        width:100%;
+        max-width:100%;
+        min-width:0;
+    }
+    [data-testid="stFileUploader"] section { width:100%; }
+    [data-testid="stImage"] img { width:auto; max-width:min(100%, 220px); }
+    .stApp button, .stApp [role="button"] { min-height:46px; }
+    h1 { font-size:clamp(1.65rem, 7vw, 2.1rem); }
+    h2 { font-size:clamp(1.3rem, 5.5vw, 1.65rem); }
+    h3 { font-size:clamp(1.1rem, 4.5vw, 1.35rem); }
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+def style_chart(
+    figure: go.Figure,
+    *,
+    height: int | None = None,
+    margin: dict[str, int] | None = None,
+) -> None:
+    figure.update_layout(
+        template="plotly_white",
+        paper_bgcolor="#FFFFFF",
+        plot_bgcolor="#FFFFFF",
+        font={"family": "Manrope, sans-serif", "color": "#0F172A", "size": 12},
+        title_font={"color": "#0F172A", "size": 16},
+        legend={
+            "font": {"color": "#0F172A", "size": 12},
+            "bgcolor": "#FFFFFF",
+            "bordercolor": "#E2E8F0",
+            "borderwidth": 1,
+        },
+        margin=margin or {"t": 56, "r": 16, "b": 44, "l": 16},
+        height=height,
+    )
+    figure.update_xaxes(
+        color="#0F172A",
+        title_font={"color": "#0F172A"},
+        tickfont={"color": "#334155"},
+        gridcolor="#E2E8F0",
+        zerolinecolor="#CBD5E1",
+        automargin=True,
+    )
+    figure.update_yaxes(
+        color="#0F172A",
+        title_font={"color": "#0F172A"},
+        tickfont={"color": "#334155"},
+        gridcolor="#E2E8F0",
+        zerolinecolor="#CBD5E1",
+        automargin=True,
+    )
+
+
+def render_chart(
+    figure: go.Figure,
+    *,
+    height: int | None = None,
+    margin: dict[str, int] | None = None,
+) -> None:
+    style_chart(figure, height=height, margin=margin)
+    st.plotly_chart(
+        figure,
+        width="stretch",
+        config={"responsive": True, "displayModeBar": False},
+    )
+
+
+PAGES = ["Executive Overview", "MSME Financial Health", "Risk Prediction", "Explainable AI",
+         "Early-Warning Indicators", "Model Performance", "Methodology", "About"]
+
+
+@st.cache_resource
+def get_bundle() -> dict:
+    if DEFAULT_MODEL_PATH.exists():
+        return joblib.load(DEFAULT_MODEL_PATH)
+    with st.spinner("Preparing the illustrative demo model..."):
+        bundle = train_models(make_demo_data(), protected_attribute="owner_gender")
+        DEFAULT_MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(bundle, DEFAULT_MODEL_PATH)
+    return bundle
+
+
+st.sidebar.markdown("<div class='eyebrow'>RESEARCH / MSME CREDIT HEALTH</div>", unsafe_allow_html=True)
+st.sidebar.title("Early Warning")
+page = st.sidebar.radio("Workspace", PAGES, label_visibility="collapsed")
+uploaded = st.sidebar.file_uploader("Upload financial CSV", type="csv")
+bundle = get_bundle()
+
+if uploaded is not None:
+    try:
+        frame = validate_financial_data(pd.read_csv(uploaded))
+        st.sidebar.caption("Using uploaded data. Validate its provenance and target definition.")
+        is_demo = False
+    except Exception as error:
+        st.sidebar.error(str(error))
+        frame, is_demo = make_demo_data(), True
+else:
+    frame, is_demo = make_demo_data(), True
+    st.sidebar.caption("Using synthetic illustrative demo data.")
+
+features = engineer_features(frame)
+flags = early_warning_indicators(frame)
+row_index = st.sidebar.selectbox("Company-period", options=list(range(len(frame))), format_func=lambda index: (
+    f"{frame.iloc[index].get('company_id', 'Row')} · {frame.iloc[index].get('period', index)}"))
+selected, selected_features = frame.iloc[[row_index]], features.iloc[[row_index]]
+
+
+def page_header(title: str, subtitle: str) -> None:
+    st.markdown("<div class='eyebrow'>MSME FINANCIAL DISTRESS / RESEARCH CONSOLE</div>", unsafe_allow_html=True)
+    st.title(title)
+    st.caption(subtitle)
+
+
+def disclaimer() -> None:
+    st.markdown("<div class='risk-note'>Analytical research estimate only. Not a guaranteed prediction, lending recommendation, or financial decision.</div>", unsafe_allow_html=True)
+
+
+def show_risk() -> dict:
+    result = predict_financial_health(selected, bundle=bundle)
+    left, middle, right = st.columns(3)
+    left.metric("Estimated distress probability", f"{result['distress_probability']:.1%}")
+    risk_class = {
+        "Low Risk": "healthy",
+        "Moderate Risk": "warning",
+        "High Risk": "danger",
+    }.get(result["risk_category"], "neutral")
+    middle.markdown(
+        f"<div class='risk-category-card' role='group' aria-label='Risk category: "
+        f"{result['risk_category']}'><div class='risk-category-label'>Risk category</div>"
+        f"<div class='risk-category-value {risk_class}'>{result['risk_category']}</div></div>",
+        unsafe_allow_html=True,
+    )
+    right.metric("Confidence indicator", f"{result['confidence_indicator']:.0%}")
+    st.caption(result["confidence_note"])
+    disclaimer()
+    return result
+
+
+if page == "Executive Overview":
+    page_header("Financial distress, before it compounds", "A research view of liquidity, leverage, and operating resilience.")
+    if is_demo:
+        st.info("Synthetic demo records and labels are illustrative only; they do not represent actual MSMEs.")
+    result = predict_financial_health(selected, bundle=bundle, include_explanations=False)
+    total_flags = int(flags.iloc[row_index].sum())
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Businesses / periods", f"{len(frame):,}")
+    c2.metric("Selected distress estimate", f"{result['distress_probability']:.1%}")
+    c3.metric("Active warning signals", str(total_flags))
+    current_ratio = selected_features.iloc[0]["Current_Ratio"]
+    c4.metric("Current ratio", f"{current_ratio:.2f}x" if pd.notna(current_ratio) else "Unavailable")
+    disclaimer()
+    if "company_id" in frame and "period" in frame:
+        series = trend_data(frame, selected.iloc[0]["company_id"])
+        if not series.empty:
+            chart = px.line(
+                series,
+                x="period",
+                y=["Revenue", "Current_Ratio"],
+                markers=True,
+                title="Selected business: revenue and liquidity trend",
+                color_discrete_sequence=["#2563EB", "#10B981"],
+            )
+            chart.update_layout(legend_title_text="Measure")
+            render_chart(chart)
+    st.subheader("Current signals")
+    active = flags.iloc[row_index][flags.iloc[row_index]].index.tolist()
+    st.write(", ".join(active) if active else "No configured warning rules are currently triggered.")
+
+elif page == "MSME Financial Health":
+    page_header("MSME Financial Health", "Statement inputs and derived ratios for the selected company-period.")
+    st.dataframe(pd.concat([selected.reset_index(drop=True), selected_features.reset_index(drop=True)], axis=1).T.rename(columns={0: "Value"}), width="stretch")
+    st.caption("Ratios use bounded calculations; zero denominators are treated as missing. Inventory days use a revenue proxy when COGS is unavailable.")
+    disclaimer()
+
+elif page == "Risk Prediction":
+    page_header("Risk Prediction", "Estimated probability, category, and the factors behind this model score.")
+    result = show_risk()
+    health_score = (1 - result["distress_probability"]) * 100
+    gauge = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=health_score,
+        number={"suffix": "%", "font": {"color": "#0F172A", "size": 42}},
+        title={"text": "Estimated financial health", "font": {"color": "#0F172A", "size": 18}},
+        gauge={
+            "axis": {"range": [0, 100], "ticksuffix": "%"},
+            "bar": {"color": "#10B981", "thickness": 0.25},
+            "bgcolor": "#FFFFFF",
+            "borderwidth": 0,
+            "steps": [
+                {"range": [0, 40], "color": "#FEE2E2"},
+                {"range": [40, 70], "color": "#FEF3C7"},
+                {"range": [70, 100], "color": "#D1FAE5"},
+            ],
+            "threshold": {
+                "line": {"color": "#0F172A", "width": 3},
+                "thickness": 0.8,
+                "value": health_score,
+            },
+        },
+    ))
+    style_chart(gauge, height=290, margin={"t": 42, "b": 12, "l": 12, "r": 12})
+    st.plotly_chart(gauge, use_container_width=True, config={"displayModeBar": False})
+    st.caption("Health score is calculated as 100% minus the model's estimated distress probability; it is not a separate diagnosis.")
+    risk, protective = st.columns(2)
+    with risk:
+        st.subheader("Risk-increasing factors")
+        st.dataframe(pd.DataFrame(result["top_risk_factors"]), width="stretch", hide_index=True)
+    with protective:
+        st.subheader("Risk-reducing factors")
+        st.dataframe(pd.DataFrame(result["protective_factors"]), width="stretch", hide_index=True)
+
+elif page == "Explainable AI":
+    page_header("Explainable AI", "How the selected model behaves globally and for this individual record.")
+    try:
+        local = explain_prediction(bundle, selected)
+        st.subheader("Why did the model assign this risk?")
+        st.caption("Positive SHAP contributions increase the model output for distress; negative contributions reduce it. Associations are not causal.")
+        bars = local["contributions"].copy()
+        bars["direction"] = bars["shap_value"].map(lambda value: "Risk increased" if value > 0 else "Risk reduced")
+        fig = px.bar(
+            bars.sort_values("shap_value"),
+            x="shap_value",
+            y="feature",
+            color="direction",
+            orientation="h",
+            color_discrete_map={"Risk increased": "#EF4444", "Risk reduced": "#2563EB"},
+            title="Individual SHAP contributions",
+        )
+        fig.update_layout(
+            legend_title_text="Contribution",
+            xaxis_title="Contribution to distress score",
+            yaxis_title=None,
+        )
+        render_chart(fig, height=400, margin={"t": 58, "r": 12, "b": 52, "l": 120})
+        importance = global_importance(bundle, frame)
+        global_fig = px.bar(
+            importance.head(15).sort_values("mean_abs_shap"),
+            x="mean_abs_shap",
+            y="feature",
+            orientation="h",
+            title="Global feature importance · mean absolute SHAP",
+            color_discrete_sequence=["#3B82F6"],
+        )
+        render_chart(global_fig, height=400, margin={"t": 58, "r": 12, "b": 48, "l": 120})
+    except Exception as error:
+        st.error(f"SHAP explanation could not be calculated in this environment: {error}")
+    disclaimer()
+
+elif page == "Early-Warning Indicators":
+    page_header("Early-Warning Indicators", "Transparent heuristics that flag potentially deteriorating conditions.")
+    st.caption("Rules are configurable research heuristics, not learned predictions or universal thresholds.")
+    selected_flags = flags.iloc[[row_index]].T.rename(columns={row_index: "Triggered"})
+    selected_flags["Status"] = selected_flags["Triggered"].map({True: "Review", False: "Not triggered"})
+    st.dataframe(selected_flags.drop(columns="Triggered"), width="stretch")
+    if "company_id" in frame and "period" in frame:
+        series = trend_data(frame, selected.iloc[0]["company_id"])
+        if len(series) > 1:
+            metric = st.selectbox("Historical measure", ["Revenue", "Current_Ratio", "Debt_to_Assets", "EBITDA_Margin", "Interest_Coverage"])
+            fig = px.line(
+                series,
+                x="period",
+                y=metric,
+                markers=True,
+                title=f"{metric.replace('_', ' ')} over time",
+                color_discrete_sequence=["#2563EB"],
+            )
+            render_chart(fig)
+        else:
+            st.info("At least two dated company-period records are needed for a trend chart.")
+    else:
+        st.info("Add company_id and period columns to a longitudinal CSV to view historical trends.")
+    disclaimer()
+
+elif page == "Model Performance":
+    page_header("Model Performance", "Held-out and cross-validated metrics for the selected model bundle.")
+    report = bundle["report"]
+    st.caption(f"Selected: {report['selected_model']} · {report['selection_metric']}")
+    st.info(report["evaluation_note"])
+    st.dataframe(pd.DataFrame([report["test_metrics"]]).T.rename(columns={0: "Held-out test"}), width="stretch")
+    st.subheader("Cross-validation comparison")
+    st.dataframe(pd.DataFrame(report["cv_metrics"]).T.style.format("{:.3f}"), width="stretch")
+    if report.get("fairness"):
+        st.subheader("Audit-only group diagnostics")
+        st.dataframe(pd.DataFrame(report["fairness"]).T, width="stretch")
+        st.caption("Group attributes are excluded from model inputs. Descriptive diagnostics may be unstable for small samples.")
+    else:
+        st.caption("No held-out protected-group diagnostics are stored in this model bundle.")
+    disclaimer()
+
+elif page == "Methodology":
+    page_header("Methodology & Research Mode", "Definitions, evaluation choices, limitations, and responsible interpretation.")
+    st.subheader("Dataset")
+    st.write("The included company-period dataset is synthetic, generated with a fixed seed, and labeled by a noisy illustrative rule. It is not external evidence or real default data.")
+    st.subheader("Model methodology")
+    st.write("Logistic Regression, class-weighted Random Forest, and XGBoost are compared. Median imputation and scaling are fitted inside each model pipeline. Group-disjoint stratified splits are used when company identifiers exist. The selected model maximizes mean training-fold ROC-AUC.")
+    st.subheader("Evaluation metrics")
+    st.write("Accuracy, precision, recall, F1, ROC-AUC, and average precision (PR-AUC). These depend on the label, sample, split, and 0.5 classification threshold.")
+    st.subheader("Fairness and sources of bias")
+    st.write("Protected attributes are never model inputs. If supplied for a legitimate audit, held-out group label rates, true-positive rates, and false-positive rates are descriptive only. Selection bias, historical decisions, missingness, sector/geographic representation, and label construction can all produce biased estimates.")
+    st.subheader("Limitations and ethical use")
+    st.write("The score is not causal, calibrated uncertainty, a guaranteed prediction, lending advice, or a decision engine. Validate definitions, data rights, external and temporal performance, subgroup behavior, and calibration with qualified reviewers before any consequential use. Provide human oversight and recourse.")
+    st.subheader("Feature definitions")
+    st.dataframe(pd.DataFrame({"Feature": features.columns, "Definition": ["Raw numeric statement field" if name in frame.columns else "Engineered ratio; see project README" for name in features.columns]}), width="stretch", hide_index=True)
+    disclaimer()
+
+elif page == "About":
+    page_header("About Surojit Malakar", "Finance, research, operations, and technology in service of practical impact.")
+    photo_column, intro_column = st.columns([1, 2], gap="large")
+    with photo_column:
+        st.image(
+            "https://github.com/surojitmalakar.png?size=440",
+            caption="Surojit Malakar",
+            width=220,
+        )
+    with intro_column:
+        st.subheader("A little about me")
+        st.write(
+            "I am a BBA (Honours with Research) student at Techno India University, "
+            "Kolkata, specializing in Finance, Business Analytics, and Operations. "
+            "My interests lie at the intersection of financial analysis, business "
+            "strategy, operations, research, and social entrepreneurship."
+        )
+        st.write(
+            "My long-term goal is to build a career where I can combine financial "
+            "and analytical thinking with research, strategic decision-making, and "
+            "practical business execution, while continuing to develop initiatives "
+            "that create measurable economic and social impact."
+        )
+
+    st.subheader("Entrepreneurship & community impact")
+    st.write(
+        "I am the Founder of SkillseED India, a rural social enterprise focused on "
+        "skill development, agribusiness education, and farmer empowerment. Through "
+        "SkillseED India, I have worked with students and farmers across West Bengal "
+        "and developed initiatives focused on practical education, skill "
+        "development, and agricultural business opportunities."
+    )
+    st.write(
+        "I am also the Founder and Developer of ZynoqIndia, where I have worked on "
+        "an eco-tourism and open-access research publishing platform. This experience "
+        "has allowed me to combine business strategy with technology, including "
+        "product development, UI/UX, React, Vite, Supabase, and digital publishing systems."
+    )
+
+    st.subheader("Research & analytical frameworks")
+    st.write(
+        "My research work focuses on solving practical business and economic problems "
+        "through structured analytical frameworks. I developed the Farm-to-Consumer "
+        "(F2C 4.0) Model, which focuses on farmer entrepreneurship education, "
+        "institutional market access, and cooperative business development."
+    )
+    st.write(
+        "I have also developed Decision Paralysis Economics (DPE), an analytical "
+        "framework examining the organizational and economic costs associated with "
+        "delayed decision-making in environments affected by information overload "
+        "and AI-mediated ambiguity."
+    )
+    st.write(
+        "My academic research experience includes primary data collection, survey "
+        "research, statistical analysis, SPSS-based reporting, and the development "
+        "of analytical frameworks."
+    )
+
+    st.subheader("Experience & interests")
+    st.write(
+        "Alongside my research and entrepreneurial work, I have gained experience "
+        "in HR operations, project management, financial analysis, business "
+        "operations, and community development. My professional experience has "
+        "allowed me to work on recruitment, process improvement, cross-functional "
+        "coordination, research, and program management."
+    )
+    st.write(
+        "I am particularly interested in finance, business analytics, operations "
+        "strategy, agribusiness, financial decision-making, research, and "
+        "technology-enabled business models."
+    )
