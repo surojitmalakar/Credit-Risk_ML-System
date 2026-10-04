@@ -33,67 +33,148 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap');
 :root {
     color-scheme: light;
-    --ink:#19342d;
-    --muted:#4e625a;
-    --mint:#d9efe4;
-    --coral:#d97757;
-    --paper:#f5f7f3;
+    --page:#F8FAFC;
+    --sidebar:#0F172A;
+    --primary:#2563EB;
+    --blue:#3B82F6;
+    --healthy:#10B981;
+    --warning:#F59E0B;
+    --danger:#EF4444;
+    --ink:#0F172A;
+    --muted:#64748B;
+    --border:#E2E8F0;
+    --card:#FFFFFF;
 }
 html, body, [class*="css"] { font-family:'Manrope',sans-serif; color:var(--ink); }
-html, body { max-width:100%; overflow-x:hidden; }
-.stApp { background: radial-gradient(ellipse at 90% 0%, #e9f2e8 0, transparent 36%), var(--paper); }
-h1, h2, h3, h4, h5, h6 { color:var(--ink) !important; letter-spacing:0; }
+html, body { width:100%; max-width:100%; overflow-x:hidden; }
+.stApp, [data-testid="stAppViewContainer"] { background:var(--page); }
+h1, h2, h3, h4, h5, h6 { color:var(--ink) !important; letter-spacing:-.02em; }
 p, li, label, legend, small, [data-testid="stCaptionContainer"],
 [data-testid="stWidgetLabel"], [data-testid="stMarkdownContainer"],
 [data-testid="stMetricLabel"], [data-testid="stMetricValue"],
 [data-testid="stMetricDelta"], [data-testid="stMarkdownContainer"] *,
-[data-testid="stWidgetLabel"] *, [data-testid="stSidebar"] * {
-    color:var(--ink) !important;
-}
-[data-testid="stMetric"] {
+[data-testid="stWidgetLabel"] * { color:var(--ink) !important; }
+[data-testid="stCaptionContainer"], .stCaption { color:var(--muted) !important; }
+[data-testid="stMainBlockContainer"] { max-width:100%; padding-top:2rem; padding-bottom:3rem; }
+[data-testid="stMetric"], [data-testid="stDataFrame"], [data-testid="stTable"],
+[data-testid="stPlotlyChart"], [data-testid="stVerticalBlockBorderWrapper"] {
     min-width:0;
-    background:rgba(255,255,255,.82);
-    border:1px solid #dfe8df;
-    padding:14px 16px;
-    border-radius:6px;
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:12px;
 }
-[data-testid="stSidebar"] { background:#edf3ec; border-right:1px solid #dbe5dc; }
-[data-testid="stDataFrame"] {
+[data-testid="stMetric"] { padding:16px; }
+[data-testid="stMetricLabel"] { color:var(--muted) !important; }
+[data-testid="stMetricValue"] { color:var(--ink) !important; }
+[data-testid="stDataFrame"], [data-testid="stTable"] { max-width:100%; overflow-x:auto; }
+[data-testid="stPlotlyChart"] {
+    width:100%;
     max-width:100%;
-    border:1px solid #dfe8df;
-    border-radius:6px;
+    min-width:0;
 }
-.eyebrow { font:500 11px 'DM Mono',monospace; color:#4e625a; text-transform:uppercase; }
-.risk-note { border-left:3px solid #d97757; padding:10px 14px; background:#fff8f4; color:#573b31; }
+[data-testid="stSidebar"], [data-testid="stSidebarContent"] {
+    background:var(--sidebar) !important;
+    border-right:1px solid #1E293B;
+}
+[data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3, [data-testid="stSidebar"] h4,
+[data-testid="stSidebar"] h5, [data-testid="stSidebar"] h6,
+[data-testid="stSidebar"] p, [data-testid="stSidebar"] small,
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"],
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
+    color:#FFFFFF !important;
+}
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] { color:#CBD5E1 !important; }
+[data-testid="stSidebar"] .eyebrow { color:#CBD5E1 !important; }
+[data-testid="stSidebar"] [data-testid="stRadio"] label {
+    color:#CBD5E1 !important;
+    border-radius:8px;
+    padding:.45rem .6rem;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {
+    background:var(--primary);
+    color:#FFFFFF !important;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) * {
+    color:#FFFFFF !important;
+}
+[data-testid="stSidebar"] [data-baseweb="select"] > div,
+[data-testid="stSidebar"] [data-testid="stFileUploader"] section {
+    background:#1E293B;
+    border-color:#475569;
+    color:#FFFFFF;
+}
+[data-testid="stSidebar"] [data-baseweb="select"] *,
+[data-testid="stSidebar"] [data-testid="stFileUploader"] * {
+    color:#F8FAFC !important;
+}
+[data-testid="stSidebar"] [data-testid="stFileUploader"] section {
+    border:1px dashed #64748B;
+    border-radius:8px;
+}
+[data-testid="stSidebar"] [data-testid="stFileUploader"] button {
+    background:#334155 !important;
+    border-color:#64748B !important;
+    color:#FFFFFF !important;
+}
+.eyebrow { font:600 11px 'DM Mono',monospace; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; }
+.risk-note {
+    border:1px solid #FECACA;
+    border-left:4px solid var(--danger);
+    border-radius:12px;
+    padding:16px;
+    background:#FEF2F2;
+    color:#7F1D1D;
+}
+.risk-category-card {
+    min-height:100%;
+    padding:16px;
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:12px;
+}
+.risk-category-label { color:var(--muted) !important; font-size:.875rem; }
+.risk-category-value {
+    display:inline-block;
+    margin-top:.45rem;
+    padding:.25rem .65rem;
+    border-radius:999px;
+    font-size:1.25rem;
+    font-weight:700;
+}
+.risk-category-value.healthy { background:#D1FAE5; color:#065F46 !important; }
+.risk-category-value.warning { background:#FEF3C7; color:#78350F !important; }
+.risk-category-value.danger { background:#FEE2E2; color:#991B1B !important; }
+.risk-category-value.neutral { background:#E2E8F0; color:#0F172A !important; }
 .stApp button, .stApp [role="button"] {
+    min-height:44px;
     color:var(--ink) !important;
-    background-color:#e5efe8;
-    border-color:#cbd9ce;
+    border-color:var(--border) !important;
 }
-.stApp input, .stApp textarea, .stApp [data-baseweb="select"] * {
-    color:var(--ink) !important;
+.stApp [data-testid="stDownloadButton"] button,
+.stApp [data-testid="stFormSubmitButton"] button {
+    background:var(--primary);
+    border-color:var(--primary);
+    color:#FFFFFF !important;
 }
-.stApp [data-testid="stImage"] img {
-    max-width:100%;
-    height:auto;
-    object-fit:contain;
-}
+.stApp input, .stApp textarea, .stApp [data-baseweb="select"] * { color:var(--ink); }
+.stApp [data-testid="stImage"] img { max-width:100%; height:auto; object-fit:contain; }
+[data-testid="stAlert"] { border-radius:12px; }
+[data-testid="stAlert"] p { color:var(--ink) !important; }
 @media (max-width: 767px) {
-    html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+    html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"],
+    [data-testid="stMainBlockContainer"] {
         width:100%;
         max-width:100%;
         min-width:0;
         overflow-x:hidden;
     }
     [data-testid="stMainBlockContainer"] {
-        width:100%;
-        max-width:100%;
-        min-width:0;
-        padding:1rem clamp(.75rem, 4vw, 1rem) 2rem;
+        padding:1rem clamp(12px, 4vw, 18px) 2rem;
     }
     [data-testid="stHorizontalBlock"] {
         flex-wrap:wrap;
-        gap:.75rem;
+        gap:.65rem;
         min-width:0;
     }
     [data-testid="stHorizontalBlock"] > [data-testid="column"] {
@@ -102,32 +183,85 @@ p, li, label, legend, small, [data-testid="stCaptionContainer"],
         min-width:0 !important;
     }
     [data-testid="stSidebar"][aria-expanded="true"] {
-        width:min(88vw, 20rem) !important;
-        min-width:min(88vw, 20rem) !important;
-        max-width:88vw !important;
+        width:min(86vw, 20rem) !important;
+        min-width:min(86vw, 20rem) !important;
+        max-width:86vw !important;
     }
-    [data-testid="stMetric"] {
-        width:100%;
-        padding:12px;
-    }
+    [data-testid="stMetric"] { width:100%; padding:14px; }
     [data-testid="stDataFrame"], [data-testid="stTable"] {
         max-width:100%;
         overflow-x:auto;
     }
-    [data-testid="stPlotlyChart"], [data-testid="stImage"] {
+    [data-testid="stPlotlyChart"], [data-testid="stImage"],
+    [data-testid="stFileUploader"], [data-baseweb="select"] {
+        width:100%;
         max-width:100%;
         min-width:0;
     }
-    [data-testid="stImage"] img {
-        width:auto;
-        max-width:min(100%, 220px);
-    }
-    h1 { font-size:clamp(1.7rem, 7vw, 2.25rem); }
-    h2 { font-size:clamp(1.35rem, 5.5vw, 1.75rem); }
-    h3 { font-size:clamp(1.15rem, 4.5vw, 1.4rem); }
+    [data-testid="stFileUploader"] section { width:100%; }
+    [data-testid="stImage"] img { width:auto; max-width:min(100%, 220px); }
+    .stApp button, .stApp [role="button"] { min-height:46px; }
+    h1 { font-size:clamp(1.65rem, 7vw, 2.1rem); }
+    h2 { font-size:clamp(1.3rem, 5.5vw, 1.65rem); }
+    h3 { font-size:clamp(1.1rem, 4.5vw, 1.35rem); }
 }
 </style>
 """, unsafe_allow_html=True)
+
+
+def style_chart(
+    figure: go.Figure,
+    *,
+    height: int | None = None,
+    margin: dict[str, int] | None = None,
+) -> None:
+    figure.update_layout(
+        template="plotly_white",
+        paper_bgcolor="#FFFFFF",
+        plot_bgcolor="#FFFFFF",
+        font={"family": "Manrope, sans-serif", "color": "#0F172A", "size": 12},
+        title_font={"color": "#0F172A", "size": 16},
+        legend={
+            "font": {"color": "#0F172A", "size": 12},
+            "bgcolor": "#FFFFFF",
+            "bordercolor": "#E2E8F0",
+            "borderwidth": 1,
+        },
+        margin=margin or {"t": 56, "r": 16, "b": 44, "l": 16},
+        height=height,
+        autosize=True,
+    )
+    figure.update_xaxes(
+        color="#0F172A",
+        title_font={"color": "#0F172A"},
+        tickfont={"color": "#334155"},
+        gridcolor="#E2E8F0",
+        zerolinecolor="#CBD5E1",
+        automargin=True,
+    )
+    figure.update_yaxes(
+        color="#0F172A",
+        title_font={"color": "#0F172A"},
+        tickfont={"color": "#334155"},
+        gridcolor="#E2E8F0",
+        zerolinecolor="#CBD5E1",
+        automargin=True,
+    )
+
+
+def render_chart(
+    figure: go.Figure,
+    *,
+    height: int | None = None,
+    margin: dict[str, int] | None = None,
+) -> None:
+    style_chart(figure, height=height, margin=margin)
+    st.plotly_chart(
+        figure,
+        width="stretch",
+        config={"responsive": True, "displayModeBar": False},
+    )
+
 
 PAGES = ["Executive Overview", "MSME Financial Health", "Risk Prediction", "Explainable AI",
          "Early-Warning Indicators", "Model Performance", "Methodology", "About"]
@@ -183,7 +317,17 @@ def show_risk() -> dict:
     result = predict_financial_health(selected, bundle=bundle)
     left, middle, right = st.columns(3)
     left.metric("Estimated distress probability", f"{result['distress_probability']:.1%}")
-    middle.metric("Risk category", result["risk_category"])
+    risk_class = {
+        "Low Risk": "healthy",
+        "Moderate Risk": "warning",
+        "High Risk": "danger",
+    }.get(result["risk_category"], "neutral")
+    middle.markdown(
+        f"<div class='risk-category-card' role='group' aria-label='Risk category: "
+        f"{result['risk_category']}'><div class='risk-category-label'>Risk category</div>"
+        f"<div class='risk-category-value {risk_class}'>{result['risk_category']}</div></div>",
+        unsafe_allow_html=True,
+    )
     right.metric("Confidence indicator", f"{result['confidence_indicator']:.0%}")
     st.caption(result["confidence_note"])
     disclaimer()
@@ -206,16 +350,23 @@ if page == "Executive Overview":
     if "company_id" in frame and "period" in frame:
         series = trend_data(frame, selected.iloc[0]["company_id"])
         if not series.empty:
-            chart = px.line(series, x="period", y=["Revenue", "Current_Ratio"], markers=True, title="Selected business: revenue and liquidity trend")
-            chart.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", legend_title_text="Measure")
-            st.plotly_chart(chart, use_container_width=True)
+            chart = px.line(
+                series,
+                x="period",
+                y=["Revenue", "Current_Ratio"],
+                markers=True,
+                title="Selected business: revenue and liquidity trend",
+                color_discrete_sequence=["#2563EB", "#10B981"],
+            )
+            chart.update_layout(legend_title_text="Measure")
+            render_chart(chart)
     st.subheader("Current signals")
     active = flags.iloc[row_index][flags.iloc[row_index]].index.tolist()
     st.write(", ".join(active) if active else "No configured warning rules are currently triggered.")
 
 elif page == "MSME Financial Health":
     page_header("MSME Financial Health", "Statement inputs and derived ratios for the selected company-period.")
-    st.dataframe(pd.concat([selected.reset_index(drop=True), selected_features.reset_index(drop=True)], axis=1).T.rename(columns={0: "Value"}), use_container_width=True)
+    st.dataframe(pd.concat([selected.reset_index(drop=True), selected_features.reset_index(drop=True)], axis=1).T.rename(columns={0: "Value"}), width="stretch")
     st.caption("Ratios use bounded calculations; zero denominators are treated as missing. Inventory days use a revenue proxy when COGS is unavailable.")
     disclaimer()
 
@@ -226,39 +377,34 @@ elif page == "Risk Prediction":
     gauge = go.Figure(go.Indicator(
         mode="gauge+number",
         value=health_score,
-        number={"suffix": "%", "font": {"color": "#19342d", "size": 42}},
-        title={"text": "Estimated financial health", "font": {"color": "#19342d", "size": 18}},
+        number={"suffix": "%", "font": {"color": "#0F172A", "size": 42}},
+        title={"text": "Estimated financial health", "font": {"color": "#0F172A", "size": 18}},
         gauge={
             "axis": {"range": [0, 100], "ticksuffix": "%"},
-            "bar": {"color": "#448568", "thickness": 0.25},
-            "bgcolor": "rgba(255,255,255,.55)",
+            "bar": {"color": "#10B981", "thickness": 0.25},
+            "bgcolor": "#FFFFFF",
             "borderwidth": 0,
             "steps": [
-                {"range": [0, 40], "color": "#f1d4c9"},
-                {"range": [40, 70], "color": "#f4e6bd"},
-                {"range": [70, 100], "color": "#d9efe4"},
+                {"range": [0, 40], "color": "#FEE2E2"},
+                {"range": [40, 70], "color": "#FEF3C7"},
+                {"range": [70, 100], "color": "#D1FAE5"},
             ],
             "threshold": {
-                "line": {"color": "#19342d", "width": 3},
+                "line": {"color": "#0F172A", "width": 3},
                 "thickness": 0.8,
                 "value": health_score,
             },
         },
     ))
-    gauge.update_layout(
-        height=260,
-        margin={"t": 55, "b": 20, "l": 35, "r": 35},
-        paper_bgcolor="rgba(0,0,0,0)",
-    )
-    st.plotly_chart(gauge, use_container_width=True)
+    render_chart(gauge, height=290, margin={"t": 42, "b": 12, "l": 12, "r": 12})
     st.caption("Health score is calculated as 100% minus the model's estimated distress probability; it is not a separate diagnosis.")
     risk, protective = st.columns(2)
     with risk:
         st.subheader("Risk-increasing factors")
-        st.dataframe(pd.DataFrame(result["top_risk_factors"]), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(result["top_risk_factors"]), width="stretch", hide_index=True)
     with protective:
         st.subheader("Risk-reducing factors")
-        st.dataframe(pd.DataFrame(result["protective_factors"]), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(result["protective_factors"]), width="stretch", hide_index=True)
 
 elif page == "Explainable AI":
     page_header("Explainable AI", "How the selected model behaves globally and for this individual record.")
@@ -268,13 +414,31 @@ elif page == "Explainable AI":
         st.caption("Positive SHAP contributions increase the model output for distress; negative contributions reduce it. Associations are not causal.")
         bars = local["contributions"].copy()
         bars["direction"] = bars["shap_value"].map(lambda value: "Risk increased" if value > 0 else "Risk reduced")
-        fig = px.bar(bars.sort_values("shap_value"), x="shap_value", y="feature", color="direction", orientation="h", color_discrete_map={"Risk increased": "#c66849", "Risk reduced": "#448568"}, title="Individual SHAP contributions")
-        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, use_container_width=True)
+        fig = px.bar(
+            bars.sort_values("shap_value"),
+            x="shap_value",
+            y="feature",
+            color="direction",
+            orientation="h",
+            color_discrete_map={"Risk increased": "#EF4444", "Risk reduced": "#2563EB"},
+            title="Individual SHAP contributions",
+        )
+        fig.update_layout(
+            legend_title_text="Contribution",
+            xaxis_title="Contribution to distress score",
+            yaxis_title=None,
+        )
+        render_chart(fig, height=400, margin={"t": 58, "r": 12, "b": 52, "l": 120})
         importance = global_importance(bundle, frame)
-        global_fig = px.bar(importance.head(15).sort_values("mean_abs_shap"), x="mean_abs_shap", y="feature", orientation="h", title="Global feature importance · mean absolute SHAP")
-        global_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(global_fig, use_container_width=True)
+        global_fig = px.bar(
+            importance.head(15).sort_values("mean_abs_shap"),
+            x="mean_abs_shap",
+            y="feature",
+            orientation="h",
+            title="Global feature importance · mean absolute SHAP",
+            color_discrete_sequence=["#3B82F6"],
+        )
+        render_chart(global_fig, height=400, margin={"t": 58, "r": 12, "b": 48, "l": 120})
     except Exception as error:
         st.error(f"SHAP explanation could not be calculated in this environment: {error}")
     disclaimer()
@@ -284,14 +448,20 @@ elif page == "Early-Warning Indicators":
     st.caption("Rules are configurable research heuristics, not learned predictions or universal thresholds.")
     selected_flags = flags.iloc[[row_index]].T.rename(columns={row_index: "Triggered"})
     selected_flags["Status"] = selected_flags["Triggered"].map({True: "Review", False: "Not triggered"})
-    st.dataframe(selected_flags.drop(columns="Triggered"), use_container_width=True)
+    st.dataframe(selected_flags.drop(columns="Triggered"), width="stretch")
     if "company_id" in frame and "period" in frame:
         series = trend_data(frame, selected.iloc[0]["company_id"])
         if len(series) > 1:
             metric = st.selectbox("Historical measure", ["Revenue", "Current_Ratio", "Debt_to_Assets", "EBITDA_Margin", "Interest_Coverage"])
-            fig = px.line(series, x="period", y=metric, markers=True, title=f"{metric.replace('_', ' ')} over time")
-            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig, use_container_width=True)
+            fig = px.line(
+                series,
+                x="period",
+                y=metric,
+                markers=True,
+                title=f"{metric.replace('_', ' ')} over time",
+                color_discrete_sequence=["#2563EB"],
+            )
+            render_chart(fig)
         else:
             st.info("At least two dated company-period records are needed for a trend chart.")
     else:
@@ -303,12 +473,12 @@ elif page == "Model Performance":
     report = bundle["report"]
     st.caption(f"Selected: {report['selected_model']} · {report['selection_metric']}")
     st.info(report["evaluation_note"])
-    st.dataframe(pd.DataFrame([report["test_metrics"]]).T.rename(columns={0: "Held-out test"}), use_container_width=True)
+    st.dataframe(pd.DataFrame([report["test_metrics"]]).T.rename(columns={0: "Held-out test"}), width="stretch")
     st.subheader("Cross-validation comparison")
-    st.dataframe(pd.DataFrame(report["cv_metrics"]).T.style.format("{:.3f}"), use_container_width=True)
+    st.dataframe(pd.DataFrame(report["cv_metrics"]).T.style.format("{:.3f}"), width="stretch")
     if report.get("fairness"):
         st.subheader("Audit-only group diagnostics")
-        st.dataframe(pd.DataFrame(report["fairness"]).T, use_container_width=True)
+        st.dataframe(pd.DataFrame(report["fairness"]).T, width="stretch")
         st.caption("Group attributes are excluded from model inputs. Descriptive diagnostics may be unstable for small samples.")
     else:
         st.caption("No held-out protected-group diagnostics are stored in this model bundle.")
@@ -327,7 +497,7 @@ elif page == "Methodology":
     st.subheader("Limitations and ethical use")
     st.write("The score is not causal, calibrated uncertainty, a guaranteed prediction, lending advice, or a decision engine. Validate definitions, data rights, external and temporal performance, subgroup behavior, and calibration with qualified reviewers before any consequential use. Provide human oversight and recourse.")
     st.subheader("Feature definitions")
-    st.dataframe(pd.DataFrame({"Feature": features.columns, "Definition": ["Raw numeric statement field" if name in frame.columns else "Engineered ratio; see project README" for name in features.columns]}), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame({"Feature": features.columns, "Definition": ["Raw numeric statement field" if name in frame.columns else "Engineered ratio; see project README" for name in features.columns]}), width="stretch", hide_index=True)
     disclaimer()
 
 elif page == "About":
