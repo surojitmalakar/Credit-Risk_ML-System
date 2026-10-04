@@ -28,7 +28,7 @@ _ROLE_PATTERNS: dict[str, tuple[str, ...]] = {
     "date / time": ("date", "time", "period", "year", "month", "timestamp"),
     "transaction amount": ("transaction", "amount", "payment", "spend", "purchase", "credit", "debit"),
     "geography": ("city", "state", "country", "region", "location", "pin", "postal"),
-    "assets": ("asset", "cash", "receivable", "inventory"),
+    "assets": ("asset", "receivable", "inventory"),
     "liabilities": ("liabilit", "payable"),
 }
 _FINANCIAL_TERMS = {"revenue / income", "profit", "debt / exposure", "assets", "liabilities"}
@@ -68,6 +68,10 @@ def _role_for_column(column: object, values: pd.Series) -> list[str]:
     for role, patterns in _ROLE_PATTERNS.items():
         if role == "date / time":
             matched = bool(re.search(r"\b(date|time|period|year|month|timestamp)\b", name))
+        elif role == "assets":
+            matched = any(pattern in name for pattern in patterns) or (
+                bool(re.search(r"\bcash\b", name)) and "flow" not in name
+            )
         else:
             matched = any(pattern in name for pattern in patterns)
         if matched:
@@ -439,16 +443,73 @@ def analyze_dataset(frame: pd.DataFrame, filename: str = "uploaded_data") -> dic
         findings.append(f"{int(anomalies.sum()):,} records fall in the top 5% of anomaly scores.")
     if not segment_frame.empty:
         findings.append(f"Numeric patterns support exploratory segmentation into {len(segment_frame)} groups.")
-    recommendations = [
-        "Review columns with missing values before operational use.",
-        "Verify detected variable meanings against the source data dictionary.",
-    ]
+    recommendations = []
+    if missing_rate > 0:
+        missing_columns = [
+            str(column) for column in data.columns
+            if data[column].isna().mean() >= 0.2
+        ]
+        if missing_columns:
+            recommendations.append(
+                "Prioritize validation or completion of high-missingness fields: "
+                + ", ".join(missing_columns[:5]) + "."
+            )
+        else:
+            recommendations.append("Review missing values before operational use; avoid assuming missing entries are zero.")
+    if roles:
+        detected_roles = [
+            column for column, column_roles in roles.items()
+            if column_roles
+        ]
+        recommendations.append(
+            "Confirm inferred field meanings against the source data dictionary, especially: "
+            + ", ".join(detected_roles[:5]) + "."
+        )
+    else:
+        recommendations.append(
+            "No domain-specific variables were confidently inferred; confirm field meanings before assigning business risk."
+        )
     if anomalies.any():
-        recommendations.append("Review flagged anomaly records; an anomaly is not by itself evidence of default or misconduct.")
+        recommendations.append(
+            f"Review the {int(anomalies.sum()):,} statistically unusual records and verify source values; "
+            "an anomaly is not evidence of default, fraud, or misconduct."
+        )
     if not trends.empty and trends["Direction"].eq("Declining").any():
-        recommendations.append("Review declining time-series measures and verify that reporting periods are comparable.")
+        declining = trends.loc[trends["Direction"].eq("Declining"), "Variable"].astype(str).tolist()
+        recommendations.append(
+            "Investigate observed declines in " + ", ".join(declining[:5])
+            + " and verify that periods and measurement units are comparable."
+        )
+    if not high_risk_groups_frame.empty:
+        first_group = high_risk_groups_frame.iloc[0]
+        recommendations.append(
+            f"Review the observed {first_group['Variable']} segment '{first_group['Group']}' "
+            f"({first_group['Observed risk pattern %']:.1f}% of labeled records match the detected risk label); "
+            "this is a historical pattern, not a prediction."
+        )
+    if not correlations_frame.empty and correlations_frame.iloc[0]["Absolute correlation"] >= 0.9:
+        top_pair = correlations_frame.iloc[0]
+        recommendations.append(
+            f"Check {top_pair['Variable A']} and {top_pair['Variable B']} for redundant or overlapping measurements "
+            "before interpreting model drivers."
+        )
+    target_proportions = data[target].value_counts(normalize=True, dropna=True) if target else pd.Series(dtype=float)
+    if len(target_proportions) > 1:
+        if target_proportions.iloc[0] >= 0.9:
+            recommendations.append(
+                f"Target '{target}' is imbalanced ({target_proportions.iloc[0]:.1%} in its most common class); "
+                "review class-wise metrics and representativeness."
+            )
     if target and model_result["status"] == "evaluated":
-        recommendations.append("Treat model metrics as exploratory hold-out results and validate on representative future data.")
+        recommendations.append(
+            "Treat supervised results as exploratory hold-out metrics; validate on representative future data "
+            "before using predictions for decisions."
+        )
+    elif not target:
+        recommendations.append(
+            "No explicit default target was detected. Use anomaly and statistical risk-pattern findings "
+            "for review; no predicted risk probability is available."
+        )
     concentration: list[dict[str, Any]] = []
     exposure_columns = [
         str(column) for column, column_roles in roles.items()
@@ -486,6 +547,25 @@ def analyze_dataset(frame: pd.DataFrame, filename: str = "uploaded_data") -> dic
         "data_quality_percent": round((1 - missing_rate) * 100, 2),
         "anomaly_count": int(anomalies.sum()),
         "model": model_result,
+        "analysis_mode": "Automatic Dataset Intelligence",
+        "prediction_available": model_result["status"] == "evaluated",
+        "analysis_result_title": (
+            "Supervised Risk Prediction" if model_result["status"] == "evaluated"
+            else "Anomaly Analysis" if not target
+            else "Risk Pattern Analysis"
+        ),
+        "alternative_analysis": (
+            "Supervised model evaluation with hold-out metrics"
+            if model_result["status"] == "evaluated"
+            else "Anomaly + Statistical Risk Pattern Detection"
+        ),
+        "risk_prediction_summary": (
+            "Model evaluated; see hold-out metrics below. No calibrated probability of default is reported."
+            if model_result["status"] == "evaluated"
+            else "Not available without a target."
+            if not target
+            else "Not available; the detected target could not be evaluated."
+        ),
         "findings": findings,
         "early_warnings": [
             f"{row['Variable']} is declining across observed periods."
@@ -506,7 +586,12 @@ def analyze_dataset(frame: pd.DataFrame, filename: str = "uploaded_data") -> dic
             + (
                 "A supervised model was evaluated on a hold-out split; its results are exploratory."
                 if model_result["status"] == "evaluated"
-                else "No predicted risk probability is reported."
+                else (
+                    "No explicit default target was found. Anomaly and risk-pattern analysis was performed instead."
+                    if not target else
+                    "A target was detected, but the available data did not support a reliable held-out evaluation. "
+                    "Anomaly and risk-pattern analysis was performed instead."
+                )
             )
         ),
     }

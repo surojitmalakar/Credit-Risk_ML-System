@@ -43,6 +43,8 @@ def test_customer_master_is_automatically_profiled_and_evaluated():
     assert not analysis["high_risk_groups"].empty
     assert not analysis["trends"].empty
     assert any("association" in finding for finding in analysis["findings"])
+    assert analysis["prediction_available"] is True
+    assert analysis["analysis_result_title"] == "Supervised Risk Prediction"
 
 
 def test_unfamiliar_numeric_and_categorical_columns_are_not_rejected():
@@ -58,7 +60,12 @@ def test_unfamiliar_numeric_and_categorical_columns_are_not_rejected():
     assert analysis["numeric_columns"] == ["x1", "x2"]
     assert len(analysis["correlations"]) == 1
     assert analysis["data_quality_percent"] == 100
-    assert "No predicted risk probability" in analysis["executive_summary"]
+    assert "No explicit default target was found." in analysis["executive_summary"]
+    assert analysis["prediction_available"] is False
+    assert analysis["analysis_result_title"] == "Anomaly Analysis"
+    assert analysis["alternative_analysis"] == "Anomaly + Statistical Risk Pattern Detection"
+    assert analysis["risk_prediction_summary"] == "Not available without a target."
+    assert "No explicit default target was found. Anomaly and risk-pattern analysis was performed instead." in analysis["executive_summary"]
 
 
 def test_nonfinancial_pdf_text_remains_available_for_general_profiling():
@@ -107,3 +114,22 @@ def test_data_intelligence_reports_include_actual_profile_and_findings():
         assert b"Risk Results" in workbook_xml
         assert b"Processed Data" in workbook_xml
         assert b"Trends" in workbook_xml
+
+
+def test_no_target_excel_report_uses_user_facing_analysis_labels():
+    analysis = analyze_dataset(pd.DataFrame({
+        "client_ref": ["A-1", "A-2", "A-3"],
+        "monthly_budget": [1200, 950, 1800],
+        "zone": ["North", "South", "West"],
+    }), "clients.csv")
+    workbook = create_data_intelligence_excel(analysis)
+
+    with zipfile.ZipFile(io.BytesIO(workbook)) as archive:
+        workbook_text = b" ".join(
+            archive.read(name) for name in archive.namelist()
+            if name.endswith(".xml")
+        ).decode("utf-8", errors="replace").lower()
+
+    assert "anomaly analysis" in workbook_text
+    assert "not available without a target" in workbook_text
+    assert "not trained" not in workbook_text

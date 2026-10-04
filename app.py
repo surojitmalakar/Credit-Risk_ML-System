@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import hashlib
 from pathlib import Path
 
 SRC_DIR = Path(__file__).resolve().parent / "src"
@@ -19,6 +20,7 @@ from html import escape
 from msme_ews.data import FINANCIAL_COLUMNS, validate_financial_data
 from msme_ews.credit_assessment import apply_scenario_adjustments, generate_risk_interpretation
 from msme_ews.data_intelligence import analyze_dataset
+from msme_ews.data_visualization import build_data_visualizations
 from msme_ews.demo import make_demo_data
 from msme_ews.documents import extract_financial_document
 from msme_ews.early_warning import early_warning_indicators, trend_data
@@ -46,6 +48,105 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="auto",
 )
+
+
+def _validate_upload_cache_key(
+    filename: str,
+    revision: int,
+    content_signature: str,
+) -> None:
+    if not filename or revision < 0 or len(content_signature) != 64:
+        raise ValueError("Invalid upload cache identity.")
+
+
+@st.cache_data(show_spinner=False, max_entries=4)
+def _cached_document_extraction(
+    _content: bytes,
+    filename: str,
+    revision: int,
+    content_signature: str,
+):
+    _validate_upload_cache_key(filename, revision, content_signature)
+    return extract_financial_document(_content, filename)
+
+
+@st.cache_data(show_spinner=False, max_entries=4)
+def _cached_dataset_profile(
+    _frame: pd.DataFrame,
+    filename: str,
+    revision: int,
+    content_signature: str,
+):
+    _validate_upload_cache_key(filename, revision, content_signature)
+    intelligence = analyze_dataset(_frame, filename)
+    financial_columns = [
+        column for column in FINANCIAL_COLUMNS
+        if column in _frame
+        and pd.to_numeric(_frame[column], errors="coerce").notna().any()
+    ]
+    return intelligence, financial_columns
+
+
+@st.cache_data(show_spinner=False, max_entries=4)
+def _cached_upload_visualizations(
+    _intelligence: dict,
+    filename: str,
+    revision: int,
+    content_signature: str,
+):
+    _validate_upload_cache_key(filename, revision, content_signature)
+    return build_data_visualizations(_intelligence)
+
+
+@st.cache_data(show_spinner=False, max_entries=4)
+def _cached_intelligence_reports(
+    _intelligence: dict,
+    filename: str,
+    revision: int,
+    content_signature: str,
+):
+    _validate_upload_cache_key(filename, revision, content_signature)
+    return (
+        create_data_intelligence_pdf(_intelligence, filename),
+        create_data_intelligence_excel(_intelligence),
+    )
+
+
+@st.cache_data(show_spinner=False, max_entries=4)
+def _cached_financial_frame(
+    _frame: pd.DataFrame,
+    filename: str,
+    revision: int,
+    content_signature: str,
+):
+    _validate_upload_cache_key(filename, revision, content_signature)
+    return validate_financial_data(_frame)
+
+
+@st.cache_data(show_spinner=False, max_entries=4)
+def _cached_financial_features(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    return engineer_features(frame), early_warning_indicators(frame)
+
+
+@st.cache_data(show_spinner=False, max_entries=16)
+def _cached_financial_analysis(frame: pd.DataFrame, row_index: int) -> dict:
+    return analyze_financials(frame, row_index)
+
+
+def _session_shap(cache_key: str, bundle: dict, selected: pd.DataFrame) -> dict:
+    cache = st.session_state.setdefault("_local_shap_cache", {})
+    if cache_key not in cache:
+        cache[cache_key] = explain_prediction(bundle, selected)
+    return cache[cache_key]
+
+
+def _session_global_shap(cache_key: str, bundle: dict, frame: pd.DataFrame) -> pd.DataFrame:
+    cache = st.session_state.setdefault("_global_shap_cache", {})
+    if cache_key not in cache:
+        cache[cache_key] = global_importance(bundle, frame)
+    return cache[cache_key]
+
+
 st.markdown("""
 <style>
 :root {
@@ -1273,31 +1374,176 @@ with selector_cols[2]:
         key="financial_csv_upload",
         help="CSV, Excel workbooks, and text-based PDFs are processed locally. Scanned PDF images require OCR and are not supported.",
     )
+    reanalyze_clicked = st.button(
+        "Re-analyze dataset",
+        disabled=uploaded is None,
+        key="re_analyze_upload",
+        use_container_width=True,
+    )
 document_result = None
 data_intelligence = None
+data_visualizations = {}
 if uploaded is not None:
     try:
-        with st.spinner("AI Data Detective is profiling the uploaded dataset locally..."):
-            document_result = extract_financial_document(uploaded, uploaded.name)
-            data_intelligence = analyze_dataset(document_result.frame, uploaded.name)
-            financial_columns = [
-                column for column in FINANCIAL_COLUMNS
-                if column in document_result.frame
-                and pd.to_numeric(document_result.frame[column], errors="coerce").notna().any()
-            ]
+        upload_token = (uploaded.file_id, uploaded.name, uploaded.size)
+        same_upload = st.session_state.get("_upload_token") == upload_token
+        if same_upload:
+            upload_signature = st.session_state["_upload_signature"]
+            uploaded_content = b""
+        else:
+            uploaded_content = uploaded.getvalue()
+            upload_signature = hashlib.sha256(uploaded_content).hexdigest()
+            st.session_state["_upload_token"] = upload_token
+            st.session_state["_upload_signature"] = upload_signature
+        analysis_revision = int(st.session_state.get("_upload_analysis_revision", 0))
+        if reanalyze_clicked:
+            analysis_revision += 1
+            st.session_state["_upload_analysis_revision"] = analysis_revision
+        upload_pipeline_key = (upload_signature, uploaded.name, analysis_revision)
+        if st.session_state.get("_upload_pipeline_key") != upload_pipeline_key:
+            if not uploaded_content:
+                uploaded_content = uploaded.getvalue()
+            with st.status("Analyzing dataset...", expanded=True) as progress:
+                document_result = _cached_document_extraction(
+                    uploaded_content,
+                    uploaded.name,
+                    analysis_revision,
+                    upload_signature,
+                )
+                progress.update(label="Detecting variables...")
+                data_intelligence, financial_columns = _cached_dataset_profile(
+                    document_result.frame,
+                    uploaded.name,
+                    analysis_revision,
+                    upload_signature,
+                )
+                progress.update(label="Running risk analysis...")
+                data_visualizations = _cached_upload_visualizations(
+                    data_intelligence,
+                    uploaded.name,
+                    analysis_revision,
+                    upload_signature,
+                )
+                progress.update(label="Generating insights...")
+                intelligence_pdf, intelligence_excel = _cached_intelligence_reports(
+                    data_intelligence,
+                    uploaded.name,
+                    analysis_revision,
+                    upload_signature,
+                )
+                financial_frame = (
+                    _cached_financial_frame(
+                        document_result.frame,
+                        uploaded.name,
+                        analysis_revision,
+                        upload_signature,
+                    )
+                    if financial_columns else None
+                )
+                financial_base = (
+                    _cached_financial_features(financial_frame)
+                    if financial_frame is not None else None
+                )
+                progress.update(label="Analysis complete", state="complete", expanded=False)
+            st.session_state["_upload_pipeline_key"] = upload_pipeline_key
+            st.session_state["_upload_pipeline"] = {
+                "document": document_result,
+                "intelligence": data_intelligence,
+                "financial_columns": financial_columns,
+                "visualizations": data_visualizations,
+                "pdf": intelligence_pdf,
+                "excel": intelligence_excel,
+                "financial_frame": financial_frame,
+                "financial_base": financial_base,
+            }
+        else:
+            cached_upload = st.session_state["_upload_pipeline"]
+            document_result = cached_upload["document"]
+            data_intelligence = cached_upload["intelligence"]
+            financial_columns = cached_upload["financial_columns"]
+            data_visualizations = cached_upload["visualizations"]
+            intelligence_pdf = cached_upload["pdf"]
+            intelligence_excel = cached_upload["excel"]
+            financial_frame = cached_upload["financial_frame"]
+            financial_base = cached_upload["financial_base"]
         st.success(
             f"File successfully loaded. AI Data Detective completed. "
             f"{document_result.status} Source: {document_result.source_type}."
         )
         st.markdown("<div class='panel-header'><h3>AI Data Detective</h3></div>", unsafe_allow_html=True)
-        summary_cols = st.columns(5)
-        summary_cols[0].metric("Dataset type", data_intelligence["dataset_type"])
-        summary_cols[1].metric("Records", f"{len(document_result.frame):,}")
-        summary_cols[2].metric("Variables", f"{len(document_result.frame.columns):,}")
-        summary_cols[3].metric("Data quality", f"{data_intelligence['data_quality_percent']:.1f}%")
-        summary_cols[4].metric("Duplicates", f"{data_intelligence['duplicate_count']:,}")
+        st.markdown(
+            "<div class='panel-header'><h3>Automatic Analysis Summary</h3></div>",
+            unsafe_allow_html=True,
+        )
+        with st.container(border=True):
+            st.markdown("**Key Metrics**")
+            summary_cols = st.columns(4)
+            summary_cols[0].metric("Analysis Mode", data_intelligence["analysis_mode"])
+            summary_cols[1].metric("Dataset", data_intelligence["dataset_type"])
+            summary_cols[2].metric("Records", f"{len(document_result.frame):,}")
+            summary_cols[3].metric("Anomalies", f"{data_intelligence['anomaly_count']:,}")
+            result_cols = st.columns(3)
+            result_cols[0].metric(
+                "ML Target",
+                data_intelligence["targets"][0] if data_intelligence["targets"] else "Not detected",
+            )
+            result_cols[1].metric(
+                "Risk Prediction",
+                "Model evaluated"
+                if data_intelligence["prediction_available"]
+                else data_intelligence["risk_prediction_summary"],
+            )
+            result_cols[2].metric("Alternative Analysis", data_intelligence["alternative_analysis"])
+            if data_intelligence["targets"] and not data_intelligence["prediction_available"]:
+                st.caption(
+                    "A potential target was detected, but the available labeled data did not support "
+                    "a held-out model evaluation. Statistical pattern analysis is shown instead."
+                )
+            elif not data_intelligence["targets"]:
+                st.caption(
+                    "No explicit default target was found. Anomaly and risk-pattern analysis was performed instead."
+                )
+            else:
+                st.caption(
+                    "Predicted Risk refers to supervised model evaluation. It is exploratory and is not a "
+                    "calibrated probability of default."
+                )
+        st.markdown("<div class='panel-header'><h3>Executive Summary</h3></div>", unsafe_allow_html=True)
         st.caption(data_intelligence["executive_summary"])
-        with st.expander("Dataset profile and detected variables", expanded=not financial_columns):
+        st.markdown("<div class='panel-header'><h3>Data Intelligence Dashboard</h3></div>", unsafe_allow_html=True)
+        st.markdown("<div class='panel-header'><h3>Dataset Overview</h3></div>", unsafe_allow_html=True)
+        overview_cols = st.columns(3)
+        overview_cols[0].metric("Rows", f"{len(document_result.frame):,}")
+        overview_cols[1].metric("Columns", f"{len(document_result.frame.columns):,}")
+        overview_cols[2].metric("Missing values", f"{int(document_result.frame.isna().sum().sum()):,}")
+        overview_cols = st.columns(3)
+        overview_cols[0].metric("Duplicate records", f"{data_intelligence['duplicate_count']:,}")
+        overview_cols[1].metric("Numeric variables", len(data_intelligence["numeric_columns"]))
+        overview_cols[2].metric("Categorical variables", len(data_intelligence["categorical_columns"]))
+        st.markdown("<div class='panel-header'><h3>Visual Analytics</h3></div>", unsafe_allow_html=True)
+        if data_visualizations:
+            for section, chart_items in data_visualizations.items():
+                st.markdown(f"**{section}**")
+                for chart_index in range(0, len(chart_items), 2):
+                    chart_cols = st.columns(2)
+                    for chart_col, chart_item in zip(
+                        chart_cols,
+                        chart_items[chart_index:chart_index + 2],
+                        strict=False,
+                    ):
+                        with chart_col:
+                            st.plotly_chart(
+                                chart_item["figure"],
+                                width="stretch",
+                                config={"displayModeBar": False},
+                                key=f"data_intelligence_{section}_{chart_index}_{chart_item['title']}",
+                            )
+        else:
+            st.info(
+                "No charts could be generated from the available non-constant values. "
+                "The data profile and quality summary are still available below."
+            )
+        with st.expander("Data Profile and Detected Variables", expanded=not financial_columns):
             st.dataframe(data_intelligence["profile"], width="stretch", hide_index=True)
             if data_intelligence["identifiers"]:
                 st.caption("Potential identifiers: " + ", ".join(data_intelligence["identifiers"]))
@@ -1309,7 +1555,7 @@ if uploaded is not None:
                 f"Date/time: {', '.join(data_intelligence['date_columns']) or 'none'}"
             )
         if data_intelligence["findings"]:
-            with st.expander("Detected intelligence and key patterns", expanded=not financial_columns):
+            with st.expander("Risk / Anomaly Analysis, Early Warnings, and Recommendations", expanded=not financial_columns):
                 for finding in data_intelligence["findings"]:
                     st.write(f"- {finding}")
                 if not data_intelligence["correlations"].empty:
@@ -1331,33 +1577,63 @@ if uploaded is not None:
                 if not data_intelligence["segments"].empty:
                     st.markdown("**Exploratory numeric segments**")
                     st.dataframe(data_intelligence["segments"], width="stretch", hide_index=True)
+                st.markdown(
+                    f"**Risk / Anomaly Analysis: {data_intelligence['analysis_result_title']}**"
+                )
+                st.caption(
+                    "Predicted Risk = supervised model output. Anomaly = unusual statistical pattern. "
+                    "Risk Indicator = a data-derived business pattern. An anomaly or indicator is not, by itself, "
+                    "a default, fraud, or misconduct determination."
+                )
                 st.dataframe(data_intelligence["risk_results"].head(100), width="stretch", hide_index=True)
-                for column in data_intelligence["numeric_columns"][:3]:
-                    figure = px.histogram(
-                        data_intelligence["data"], x=column, nbins=24,
-                        title=f"Distribution: {column}",
-                        template="plotly_dark",
-                    )
-                    figure.update_layout(height=260, margin=dict(l=10, r=10, t=40, b=10), showlegend=False)
-                    st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
                 model = data_intelligence["model"]
-                st.markdown("**Automatic model evaluation**")
-                st.write(model)
+                if data_intelligence["prediction_available"]:
+                    st.markdown("**Supervised Risk Prediction — hold-out evaluation**")
+                    st.write(f"Model: {model['model']}")
+                    st.write(f"Target: {model['target']}")
+                    model_metrics = st.columns(3)
+                    if "accuracy" in model:
+                        model_metrics[0].metric("Accuracy", f"{model['accuracy']:.1%}")
+                        model_metrics[1].metric("Balanced Accuracy", f"{model['balanced_accuracy']:.1%}")
+                    else:
+                        model_metrics[0].metric("Mean Absolute Error", f"{model['mae']:.3g}")
+                        model_metrics[1].metric("R²", f"{model['r2']:.3f}")
+                    model_metrics[2].metric("Evaluation records", f"{model['test_rows']:,}")
+                    if model.get("top_features"):
+                        st.markdown("**Top model features**")
+                        st.dataframe(
+                            pd.DataFrame(model["top_features"]).rename(columns={
+                                "feature": "Feature",
+                                "importance": "Relative importance",
+                            }),
+                            width="stretch",
+                            hide_index=True,
+                        )
+                    st.caption(model.get("limitation", "Exploratory hold-out evaluation; validate before operational use."))
+                else:
+                    st.markdown(f"**{data_intelligence['analysis_result_title']}**")
+                    if not data_intelligence["targets"]:
+                        st.info(
+                            "No explicit default target was found. Anomaly and risk-pattern analysis was performed instead."
+                        )
+                    else:
+                        st.info(
+                            "A candidate target was found, but a reliable hold-out model could not be evaluated. "
+                            "Anomaly and statistical risk-pattern analysis is shown instead."
+                        )
                 if not data_intelligence["concentration"].empty:
                     st.dataframe(data_intelligence["concentration"], width="stretch", hide_index=True)
                 st.markdown("**Recommendations**")
                 for recommendation in data_intelligence["recommendations"]:
                     st.write(f"- {recommendation}")
-                st.markdown("**Early warnings**")
+                st.markdown("**Early Warnings**")
                 for warning in data_intelligence["early_warnings"]:
                     st.write(f"- {warning}")
-        report_pdf = create_data_intelligence_pdf(data_intelligence, uploaded.name)
-        report_excel = create_data_intelligence_excel(data_intelligence)
         report_cols = st.columns(2)
         with report_cols[0]:
             st.download_button(
                 "Generate PDF Report",
-                data=report_pdf,
+                data=intelligence_pdf,
                 file_name=f"{Path(uploaded.name).stem}_data_intelligence.pdf",
                 mime="application/pdf",
                 key="data_intelligence_pdf",
@@ -1365,7 +1641,7 @@ if uploaded is not None:
         with report_cols[1]:
             st.download_button(
                 "Download Excel Analysis",
-                data=report_excel,
+                data=intelligence_excel,
                 file_name=f"{Path(uploaded.name).stem}_data_intelligence.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="data_intelligence_excel",
@@ -1377,7 +1653,7 @@ if uploaded is not None:
             )
             st.dataframe(document_result.frame.head(100), width="stretch", hide_index=True)
             st.stop()
-        frame = validate_financial_data(document_result.frame)
+        frame = financial_frame
         for warning in document_result.warnings:
             st.caption(warning)
         st.caption("Document contents are processed locally; verify extracted figures against the source statement.")
@@ -1386,11 +1662,26 @@ if uploaded is not None:
         st.error(f"Document analysis failed: {error}")
         st.stop()
 else:
-    frame, is_demo = make_demo_data(), True
+    uploaded_content = b""
+    upload_signature = "synthetic-demo"
+    analysis_revision = 0
+    upload_pipeline_key = ("synthetic-demo",)
+    if st.session_state.get("_demo_pipeline_key") != upload_pipeline_key:
+        frame = make_demo_data()
+        financial_base = _cached_financial_features(frame)
+        st.session_state["_demo_pipeline_key"] = upload_pipeline_key
+        st.session_state["_demo_pipeline"] = {
+            "frame": frame,
+            "financial_base": financial_base,
+        }
+    else:
+        demo_pipeline = st.session_state["_demo_pipeline"]
+        frame = demo_pipeline["frame"]
+        financial_base = demo_pipeline["financial_base"]
+    is_demo = True
     st.caption("Using synthetic illustrative demo data.")
 
-features = engineer_features(frame)
-flags = early_warning_indicators(frame)
+features, flags = financial_base
 if "company_id" in frame:
     company_values = frame["company_id"].astype(str)
     company_options = company_values.drop_duplicates().tolist()
@@ -1420,17 +1711,6 @@ with selector_cols[1]:
         key="period_filter",
     )
 
-selected, selected_features = frame.iloc[[row_index]], features.iloc[[row_index]]
-financial_analysis = analyze_financials(frame, row_index)
-active_warning_signals = flags.iloc[row_index][flags.iloc[row_index]].index.tolist()
-recommendations = recommendations_for(
-    frame.iloc[row_index],
-    financial_analysis,
-    active_warning_signals,
-)
-model_available_for_record = has_sufficient_ml_data(frame, row_index)
-
-
 def selected_assessment() -> dict:
     if model_available_for_record:
         result = predict_financial_health(selected, bundle=bundle, include_explanations=False)
@@ -1455,12 +1735,48 @@ def selected_assessment() -> dict:
     return result
 
 
-current_assessment = selected_assessment()
-portfolio_analysis = (
-    analyze_credit_portfolio(document_result.frame)
-    if document_result is not None and document_result.document_type == "customer_loan_dataset"
-    else None
-)
+selection_cache_key = (upload_pipeline_key, int(row_index))
+selection_cache = st.session_state.setdefault("_financial_selection_cache", {})
+if selection_cache_key in selection_cache:
+    cached_selection = selection_cache[selection_cache_key]
+    selected = cached_selection["selected"]
+    selected_features = cached_selection["selected_features"]
+    financial_analysis = cached_selection["financial_analysis"]
+    active_warning_signals = cached_selection["active_warning_signals"]
+    recommendations = cached_selection["recommendations"]
+    model_available_for_record = cached_selection["model_available"]
+    current_assessment = cached_selection["assessment"]
+else:
+    selected, selected_features = frame.iloc[[row_index]], features.iloc[[row_index]]
+    financial_analysis = _cached_financial_analysis(frame, row_index)
+    active_warning_signals = flags.iloc[row_index][flags.iloc[row_index]].index.tolist()
+    recommendations = recommendations_for(
+        frame.iloc[row_index],
+        financial_analysis,
+        active_warning_signals,
+    )
+    model_available_for_record = has_sufficient_ml_data(frame, row_index)
+    current_assessment = selected_assessment()
+    selection_cache[selection_cache_key] = {
+        "selected": selected,
+        "selected_features": selected_features,
+        "financial_analysis": financial_analysis,
+        "active_warning_signals": active_warning_signals,
+        "recommendations": recommendations,
+        "model_available": model_available_for_record,
+        "assessment": current_assessment,
+    }
+    if len(selection_cache) > 24:
+        oldest_key = next(iter(selection_cache))
+        selection_cache.pop(oldest_key, None)
+
+portfolio_analysis = None
+if document_result is not None and document_result.document_type == "customer_loan_dataset":
+    portfolio_cache_key = upload_pipeline_key
+    portfolio_cache = st.session_state.setdefault("_portfolio_analysis_cache", {})
+    if portfolio_cache_key not in portfolio_cache:
+        portfolio_cache[portfolio_cache_key] = analyze_credit_portfolio(document_result.frame)
+    portfolio_analysis = portfolio_cache[portfolio_cache_key]
 
 if portfolio_analysis is not None and page == "Executive Overview":
     portfolio_summary = portfolio_analysis["summary"]
@@ -1535,7 +1851,11 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
     result = current_assessment
     if model_available_for_record and page in {"Executive Overview", "AI Copilot"}:
         try:
-            local_explanation = explain_prediction(bundle, selected)
+            local_explanation = _session_shap(
+                f"{upload_pipeline_key!r}:{row_index}",
+                bundle,
+                selected,
+            )
             result["top_risk_factors"] = local_explanation["risk_factors"]
             result["protective_factors"] = local_explanation["protective_factors"]
         except Exception as error:
@@ -1673,21 +1993,29 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
         st.markdown("<div class='panel-header'><h3>Recommendations</h3></div>", unsafe_allow_html=True)
         for recommendation in recommendations:
             st.write(f"- {recommendation}")
-        pdf_bytes = create_credit_assessment_pdf(
-            company_name,
-            selected,
-            financial_analysis,
-            result,
-            active_warning_signals,
-            recommendations,
-        )
-        excel_bytes = create_excel_analysis(
-            frame.iloc[company_rows] if uploaded is not None else selected,
-            financial_analysis,
-            result,
-            active_warning_signals,
-            recommendations,
-        )
+        credit_report_cache = st.session_state.setdefault("_credit_report_cache", {})
+        credit_report_key = (selection_cache_key, company_name, tuple(company_rows))
+        if credit_report_key not in credit_report_cache:
+            credit_report_cache[credit_report_key] = (
+                create_credit_assessment_pdf(
+                    company_name,
+                    selected,
+                    financial_analysis,
+                    result,
+                    active_warning_signals,
+                    recommendations,
+                ),
+                create_excel_analysis(
+                    frame.iloc[company_rows] if uploaded is not None else selected,
+                    financial_analysis,
+                    result,
+                    active_warning_signals,
+                    recommendations,
+                ),
+            )
+            if len(credit_report_cache) > 16:
+                credit_report_cache.pop(next(iter(credit_report_cache)), None)
+        pdf_bytes, excel_bytes = credit_report_cache[credit_report_key]
         report_cols = st.columns(2)
         with report_cols[0]:
             st.download_button(
@@ -1946,7 +2274,11 @@ elif page == "Explainable AI":
             st.info("No rule-based risk drivers were triggered by the available values.")
     else:
         try:
-            local = explain_prediction(bundle, selected)
+            local = _session_shap(
+                f"{upload_pipeline_key!r}:{row_index}",
+                bundle,
+                selected,
+            )
             st.subheader("Why did the model assign this risk?")
             st.caption("Positive SHAP contributions increase the model output for distress; negative contributions reduce it. Associations are not causal.")
             bars = local["contributions"].copy()
@@ -1966,7 +2298,11 @@ elif page == "Explainable AI":
                 yaxis_title=None,
             )
             render_chart(fig, height=400, margin={"t": 58, "r": 12, "b": 52, "l": 120})
-            importance = global_importance(bundle, frame)
+            importance = _session_global_shap(
+                repr(upload_pipeline_key),
+                bundle,
+                frame,
+            )
             global_fig = px.bar(
                 importance.head(15).sort_values("mean_abs_shap"),
                 x="mean_abs_shap",

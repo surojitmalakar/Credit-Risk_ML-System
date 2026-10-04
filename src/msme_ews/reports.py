@@ -256,8 +256,15 @@ def create_data_intelligence_pdf(analysis: dict[str, Any], filename: str) -> byt
         ("Key patterns", analysis["findings"]),
         ("Early warnings", analysis["early_warnings"] or ["No data-derived early warning was triggered."]),
         ("Risk findings and limitations", [
-            "Anomaly flags describe statistical unusualness; they do not establish default, fraud, or misconduct.",
-            analysis["model"].get("limitation", analysis["model"].get("reason", "No supervised model was evaluated.")),
+            "Predicted Risk is available only from a supervised model with an evaluable target. "
+            "Anomaly means statistical unusualness; a Risk Indicator is a detected data pattern. "
+            "Neither establishes default, fraud, or misconduct.",
+            analysis["model"].get(
+                "limitation",
+                "No explicit default target was found. Anomaly and risk-pattern analysis was performed instead."
+                if not analysis["targets"]
+                else "A supervised model could not be evaluated; statistical risk-pattern analysis was performed instead.",
+            ),
         ]),
         ("Recommendations", analysis["recommendations"]),
     ):
@@ -310,10 +317,44 @@ def create_data_intelligence_excel(analysis: dict[str, Any]) -> bytes:
     """Create a multi-sheet workbook for profiling, statistics, and risk results."""
     output = BytesIO()
     model = analysis["model"]
-    model_rows = [
-        {"Metric": key, "Value": value if not isinstance(value, (dict, list)) else str(value)}
-        for key, value in model.items()
-    ]
+    model_rows = []
+    if analysis["prediction_available"]:
+        model_rows.extend([
+            {"Metric": "Analysis type", "Value": "Supervised Risk Prediction"},
+            {"Metric": "Target", "Value": model["target"]},
+            {"Metric": "Model", "Value": model["model"]},
+            {"Metric": "Training records", "Value": model["train_rows"]},
+            {"Metric": "Evaluation records", "Value": model["test_rows"]},
+            {"Metric": "Evaluation limitation", "Value": model.get("limitation", "")},
+        ])
+        model_rows.extend(
+            {"Metric": key.replace("_", " ").title(), "Value": value}
+            for key, value in model.items()
+            if key in {"accuracy", "balanced_accuracy", "mae", "r2"}
+        )
+        model_rows.extend(
+            {"Metric": f"Feature importance: {item['feature']}", "Value": item["importance"]}
+            for item in model.get("top_features", [])
+        )
+    else:
+        model_rows.extend([
+            {
+                "Metric": "Analysis type",
+                "Value": analysis["analysis_result_title"],
+            },
+            {
+                "Metric": "ML target",
+                "Value": analysis["targets"][0] if analysis["targets"] else "Not detected",
+            },
+            {
+                "Metric": "Risk prediction",
+                "Value": analysis["risk_prediction_summary"],
+            },
+            {
+                "Metric": "Alternative analysis",
+                "Value": analysis["alternative_analysis"],
+            },
+        ])
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         pd.DataFrame([
             {"Metric": "Dataset type", "Value": analysis["dataset_type"]},
