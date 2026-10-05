@@ -6,7 +6,22 @@ import sys
 import hashlib
 from pathlib import Path
 
-SRC_DIR = Path(__file__).resolve().parent / "src"
+# Robust path resolution for Streamlit Cloud and local development
+# Try multiple possible locations for the src directory
+def _resolve_src_dir() -> Path:
+    """Resolve the src directory path robustly across environments."""
+    candidates = [
+        Path(__file__).resolve().parent / "src",  # Standard: app.py in root, src/ sibling
+        Path.cwd() / "src",                         # Streamlit Cloud: cwd is repo root
+        Path(__file__).resolve().parent.parent / "src",  # Nested deployment
+    ]
+    for candidate in candidates:
+        if candidate.exists() and (candidate / "msme_ews").exists():
+            return candidate
+    # Fallback: use the first candidate even if not found (will raise ImportError later with clear message)
+    return candidates[0]
+
+SRC_DIR = _resolve_src_dir()
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
