@@ -15,7 +15,7 @@ from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, balanced_accuracy_score, mean_absolute_error, r2_score
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, mean_absolute_error, r2_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, roc_curve
 
 
 _ROLE_PATTERNS: dict[str, tuple[str, ...]] = {
@@ -475,10 +475,36 @@ def _model_result(frame: pd.DataFrame, target: str, identifiers: list[str]) -> d
         pipeline = Pipeline([("prepare", preprocessor), ("model", model)])
         pipeline.fit(x_train, y_train)
         prediction = pipeline.predict(x_test)
-        result.update(status="evaluated", model=type(model).__name__, train_rows=len(x_train), test_rows=len(x_test))
+        result.update(status="evaluated", model=type(model).__name__, train_rows=len(x_train), test_rows=len(x_test),
+                      train_test_split="75/25 random hold-out (random_state=42)")
         if classification:
+            proba = None
+            try:
+                proba = pipeline.predict_proba(x_test)[:, 1]
+            except (AttributeError, ValueError, IndexError):
+                proba = None
+            # Binary-target extras are attached when computable; multi-class
+            # keeps accuracy/balanced accuracy only (no fake binary metrics).
+            y_bin = pd.to_numeric(y_test, errors="coerce")
+            is_binary = set(pd.unique(y_bin.dropna()).tolist()) <= {0, 1} and y_bin.nunique() == 2
             result["accuracy"] = float(accuracy_score(y_test, prediction))
             result["balanced_accuracy"] = float(balanced_accuracy_score(y_test, prediction))
+            try:
+                result["precision"] = float(precision_score(y_test, prediction, average="weighted", zero_division=0))
+                result["recall"] = float(recall_score(y_test, prediction, average="weighted", zero_division=0))
+                result["f1"] = float(f1_score(y_test, prediction, average="weighted", zero_division=0))
+            except (ValueError, TypeError):
+                pass
+            if is_binary and proba is not None:
+                try:
+                    result["roc_auc"] = float(roc_auc_score(y_bin, proba))
+                    cm = confusion_matrix(y_bin, prediction)
+                    result["confusion_matrix"] = [[int(v) for v in row] for row in cm.tolist()]
+                    fpr, tpr, _ = roc_curve(y_bin, proba)
+                    result["roc_curve"] = {"fpr": [float(v) for v in fpr.tolist()],
+                                           "tpr": [float(v) for v in tpr.tolist()]}
+                except (ValueError, TypeError):
+                    pass
         else:
             result["mae"] = float(mean_absolute_error(y_test, prediction))
             result["r2"] = float(r2_score(y_test, prediction))

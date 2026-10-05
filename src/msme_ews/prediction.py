@@ -15,7 +15,11 @@ from msme_ews.features import engineer_features
 DEFAULT_MODEL_PATH = Path(__file__).resolve().parents[2] / "models" / "msme_model.joblib"
 
 
-def load_model_bundle(path: str | Path = DEFAULT_MODEL_PATH) -> dict[str, Any]:
+def load_model_bundle(path: str | Path = DEFAULT_MODEL_PATH) -> dict[str, Any] | None:
+    """Load a model bundle if it exists; return None if not found."""
+    path = Path(path)
+    if not path.exists():
+        return None
     return joblib.load(path)
 
 
@@ -43,6 +47,11 @@ def predict_financial_health(financial_data: dict[str, Any] | pd.DataFrame,
         raise ValueError("Prediction accepts exactly one company-period at a time.")
     if bundle is None:
         bundle = load_model_bundle()
+    if bundle is None or bundle.get("model") is None:
+        raise ValueError(
+            "No trained model available. Upload a labeled dataset to train a model, "
+            "or use the rule-based assessment for transparent risk indices."
+        )
     if bundle.get("is_demo") is True:
         raise ValueError(
             "The configured model was trained on synthetic demo data and cannot be used for production predictions."

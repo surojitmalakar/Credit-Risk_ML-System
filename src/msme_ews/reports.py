@@ -626,6 +626,87 @@ def create_screening_pdf(
     return buffer.getvalue()
 
 
+def create_executive_pdf(company: str, period: str, assessment: dict,
+                       analysis: dict, warnings: list, recs: list) -> bytes:
+    """Executive summary PDF built from the live assessment (no new calc)."""
+    output = BytesIO()
+    doc = SimpleDocTemplate(output, pagesize=letter, title=f"Executive Report - {company}",
+                            rightMargin=0.55 * inch, leftMargin=0.55 * inch,
+                            topMargin=0.55 * inch, bottomMargin=0.55 * inch)
+    styles = getSampleStyleSheet()
+    story = [Paragraph("CREDIT RISK AI", styles["Title"]),
+             Paragraph("Executive Summary Report", styles["Heading2"]),
+             Paragraph(f"Company: {escape(company)} | Period: {escape(str(period))}", styles["Normal"]),
+             Spacer(1, 10)]
+    story.append(Table(_assessment_table(assessment), colWidths=[2.3 * inch, 4.6 * inch]))
+    story.append(Spacer(1, 10))
+    story.append(Paragraph("Top risk drivers", styles["Heading3"]))
+    for f in (assessment.get("top_risk_factors") or [])[:5]:
+        story.append(Paragraph(f"- {escape(str(f.get('feature')))} (weight {f.get('contribution')})", styles["Normal"]))
+    story.append(Paragraph("Early warnings", styles["Heading3"]))
+    for w in (warnings or ["No configured warning was triggered."])[:10]:
+        story.append(Paragraph(f"- {escape(str(w))}", styles["Normal"]))
+    story.append(Paragraph("Key recommendations", styles["Heading3"]))
+    for r in (recs or [])[:10]:
+        story.append(Paragraph(f"- {escape(str(r))}", styles["Normal"]))
+    story.append(Spacer(1, 8))
+    story.append(Paragraph("Analytical research estimate only; not a lending decision.", styles["Normal"]))
+    doc.build(story)
+    return output.getvalue()
+
+
+def create_early_warning_pdf(company: str, period: str, detailed: list) -> bytes:
+    output = BytesIO()
+    doc = SimpleDocTemplate(output, pagesize=letter, title="Early Warning Report")
+    styles = getSampleStyleSheet()
+    story = [Paragraph("Early Warning Report", styles["Title"]),
+             Paragraph(f"{escape(company)} | {escape(str(period))}", styles["Normal"]),
+             Spacer(1, 10)]
+    rows = [["Indicator", "Value", "Severity", "Status", "Action"]]
+    for r in detailed:
+        rows.append([str(r.get("Indicator")), str(r.get("Actual value")),
+                     str(r.get("Severity")), str(r.get("Status")),
+                     str(r.get("Recommended action"))])
+    story.append(Table(rows, repeatRows=1))
+    story.append(Paragraph("Only data-supported signals are listed; missing inputs are Not assessed.", styles["Normal"]))
+    doc.build(story)
+    return output.getvalue()
+
+
+def create_financial_health_pdf(company: str, period: str, analysis: dict) -> bytes:
+    output = BytesIO()
+    doc = SimpleDocTemplate(output, pagesize=letter, title="Financial Health Report")
+    styles = getSampleStyleSheet()
+    story = [Paragraph("Financial Health Report", styles["Title"]),
+             Paragraph(f"{escape(company)} | {escape(str(period))}", styles["Normal"]),
+             Spacer(1, 10),
+             Paragraph(f"Coverage: {escape(str(analysis.get('coverage_label', '')))}", styles["Normal"])]
+    rows = [["Ratio", "Observed value"]] + [
+        [str(k), _display(v)] for k, v in (analysis.get("ratios") or {}).items()]
+    story.append(Table(rows, repeatRows=1))
+    doc.build(story)
+    return output.getvalue()
+
+
+def create_credit_risk_pdf(company: str, period: str, assessment: dict,
+                           warnings: list, drivers: list) -> bytes:
+    output = BytesIO()
+    doc = SimpleDocTemplate(output, pagesize=letter, title="Credit Risk Report")
+    styles = getSampleStyleSheet()
+    story = [Paragraph("Credit Risk Report", styles["Title"]),
+             Paragraph(f"{escape(company)} | {escape(str(period))}", styles["Normal"]),
+             Spacer(1, 10)]
+    story.append(Table(_assessment_table(assessment), colWidths=[2.3 * inch, 4.6 * inch]))
+    story.append(Paragraph("Risk drivers", styles["Heading3"]))
+    for d in (drivers or [])[:10]:
+        story.append(Paragraph(f"- {escape(str(d.get('feature') if isinstance(d, dict) else d))}", styles["Normal"]))
+    story.append(Paragraph("Early warnings", styles["Heading3"]))
+    for w in (warnings or ["None triggered."])[:10]:
+        story.append(Paragraph(f"- {escape(str(w))}", styles["Normal"]))
+    doc.build(story)
+    return output.getvalue()
+
+
 def create_screening_excel(
     scores: pd.DataFrame,
     summary: dict[str, Any],

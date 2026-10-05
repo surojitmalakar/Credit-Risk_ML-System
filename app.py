@@ -77,11 +77,18 @@ from msme_ews.notes import (
     validate_note,
 )
 from msme_ews.portfolio import analyze_credit_portfolio
+from msme_ews.portfolio_intel import portfolio_intelligence
+from msme_ews.warning_detail import detailed_warnings, triggered_warnings
+from msme_ews.whatif import WHATIF_FIELDS, apply_whatif, available_whatif_fields, score_whatif
 from msme_ews.reports import (
     create_credit_assessment_pdf,
+    create_credit_risk_pdf,
     create_data_intelligence_excel,
     create_data_intelligence_pdf,
+    create_early_warning_pdf,
     create_excel_analysis,
+    create_executive_pdf,
+    create_financial_health_pdf,
     create_screening_excel,
     create_screening_pdf,
 )
@@ -1914,23 +1921,25 @@ def render_audit_panel() -> None:
 
 NAVIGATION = {
     "Overview": "Executive Overview",
+    "Financial Health": "MSME Financial Health",
+    "Credit Risk": "Risk Prediction",
+    "Early Warnings": "Early-Warning Indicators",
+    "AI Copilot": "AI Copilot",
+    "Scenario Simulator": "Scenario Simulator",
+    "Credit Assessment": "Credit Assessment",
+    "Data Intelligence": "Data Intelligence",
+    "Portfolio Intelligence": "Portfolio Intelligence",
+    "Model Performance": "Model Performance",
+    "Reports": "Reports",
+    "Methodology": "Methodology",
+    "About": "About",
     "Screening": "Portfolio Screening",
     "Comparison": "Compare Records",
     "Data Explorer": "Data Explorer",
-    "Data Intelligence": "Data Intelligence",
-    "Financial Health": "MSME Financial Health",
-    "Risk Prediction": "Risk Prediction",
-    "AI Copilot": "AI Copilot",
     "Explainable AI": "Explainable AI",
-    "Early Warning": "Early-Warning Indicators",
-    "Scenario Simulator": "Scenario Simulator",
     "Stress Testing": "Stress Testing",
-    "Credit Assessment": "Credit Assessment",
-    "Model Performance": "Model Performance",
     "Calibration": "Model Calibration",
     "Monitoring": "Model Monitoring",
-    "Methodology": "Methodology",
-    "About": "About",
 }
 
 
@@ -2906,31 +2915,90 @@ elif page == "Data Explorer":
     disclaimer()
 
 elif page == "MSME Financial Health":
-    page_header("MSME Financial Health", "Extracted statement inputs, available-data coverage, and derived ratios.", page="MSME Financial Health")
-    financial_summary = pd.concat(
-        [selected.reset_index(drop=True), selected_features.reset_index(drop=True)],
-        axis=1,
-    ).T.rename(columns={0: "Value"}).astype(str)
-    st.dataframe(financial_summary, width="stretch")
-    st.caption(f"Core-field coverage: {current_assessment['coverage_label']}")
-    st.dataframe(
-        pd.DataFrame(
-            [{"Ratio": label, "Value": value if value is not None else "Not available"}
-             for label, value in financial_analysis["ratios"].items()]
-        ).astype({"Value": "string"}),
-        width="stretch",
-        hide_index=True,
-    )
-    st.caption("Ratios use bounded calculations; zero denominators are treated as missing. Inventory days use a revenue proxy when COGS is unavailable.")
+    page_header("Financial Health", "Deep financial analysis of the selected company-period from observed values.", page="MSME Financial Health")
+    st.caption(f"Company: {company_name} | Period: {selected.iloc[0].get('period', 'Not identified')} | Coverage: {current_assessment['coverage_label']}")
+    row = frame.iloc[row_index]
+    feat0 = selected_features.iloc[0]
+
+    def _num(name):
+        try:
+            v = float(pd.to_numeric(pd.Series([feat0.get(name) if name in feat0.index else row.get(name)]), errors="coerce").iloc[0])
+            return v if pd.notna(v) else None
+        except (TypeError, ValueError):
+            return None
+
+    def _raw(name):
+        try:
+            v = float(pd.to_numeric(pd.Series([row.get(name)]), errors="coerce").iloc[0])
+            return v if pd.notna(v) else None
+        except (TypeError, ValueError):
+            return None
+
+    rev, rev_g = _raw("Revenue"), _num("Sales_Growth")
+    ebitda, netp = _raw("EBITDA"), _raw("Net_Profit")
+    ca, cl = _raw("Current_Assets"), _raw("Current_Liabilities")
+    debt, ta, tl = _raw("Debt"), _raw("Total_Assets"), _raw("Total_Liabilities")
+    ocf = _raw("Cash_Flow_Operations")
+    rec, inv, pay = _raw("Accounts_Receivable"), _raw("Inventory"), _raw("Accounts_Payable")
+    intexp = _raw("Interest_Expense")
+    r = financial_analysis["ratios"]
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Revenue", f"{rev:,.0f}" if rev is not None else "Not available", f"{rev_g:.1%}" if rev_g is not None else None)
+    k2.metric("Net profit", f"{netp:,.0f}" if netp is not None else "Not available",
+              f"{(r.get('Net Profit Margin') or 0):.1%} margin" if r.get("Net Profit Margin") is not None else None)
+    k3.metric("Current ratio", f"{(r.get('Current Ratio') or float('nan')):.2f}x" if r.get("Current Ratio") is not None else "Not available")
+    k4.metric("Debt / assets", f"{(r.get('Debt / Assets') or float('nan')):.2f}x" if r.get("Debt / Assets") is not None else "Not available")
+    k5, k6, k7, k8 = st.columns(4)
+    k5.metric("ROA", f"{r['Return on Assets']:.1%}" if r.get("Return on Assets") is not None else "Not available")
+    k6.metric("ROE", f"{r['Return on Equity']:.1%}" if r.get("Return on Equity") is not None else "Not available")
+    k7.metric("Interest coverage", f"{r['Interest Coverage']:.2f}x" if r.get("Interest Coverage") is not None else "Not available")
+    wc = r.get("Working Capital")
+    k8.metric("Working capital", f"{wc:,.0f}" if wc is not None else "Not available")
+    k9, k10, k11, k12 = st.columns(4)
+    k9.metric("Operating cash flow", f"{ocf:,.0f}" if ocf is not None else "Not available")
+    fcf = (ocf - 0) if ocf is not None else None
+    k10.metric("Free cash flow (proxy)", f"{fcf:,.0f}" if fcf is not None else "Not available")
+    st.caption("Free cash flow is shown as operating cash flow when capex is not in the upload; never fabricated.")
+    k11.metric("Receivables", f"{rec:,.0f}" if rec is not None else "Not available")
+    k12.metric("Inventory", f"{inv:,.0f}" if inv is not None else "Not available")
+    st.markdown("<div class='panel-header'><h3>Profitability</h3></div>", unsafe_allow_html=True)
+    st.dataframe(pd.DataFrame([
+        {"Metric": "Gross/operating/net profit (observed)", "Revenue": rev, "EBITDA": ebitda, "Net profit": netp},
+        {"Metric": "Margins", "EBITDA margin": r.get("EBITDA Margin"), "Net margin": r.get("Net Profit Margin"),
+         "ROA": r.get("Return on Assets"), "ROE": r.get("Return on Equity")},
+    ]), width="stretch", hide_index=True)
+    st.markdown("<div class='panel-header'><h3>Liquidity, leverage & cash flow</h3></div>", unsafe_allow_html=True)
+    st.dataframe(pd.DataFrame([
+        {"Area": "Liquidity", "Current ratio": r.get("Current Ratio"), "Quick ratio": r.get("Quick Ratio"),
+         "Working capital": r.get("Working Capital"), "OCF ratio": r.get("Operating Cash Flow / Revenue")},
+        {"Area": "Leverage", "Debt/equity": r.get("Debt / Equity"), "Debt/assets": r.get("Debt / Assets"),
+         "Interest coverage": r.get("Interest Coverage"), "Equity": r.get("Equity")},
+        {"Area": "Working capital", "Receivables": rec, "Inventory": inv, "Payables (if uploaded)": pay,
+         "Receivable days": r.get("Receivable Days"), "Inventory days": r.get("Inventory Days")},
+    ]), width="stretch", hide_index=True)
+    st.caption("Only observed metrics are shown; missing fields are 'Not available', never zero-filled.")
+    if "company_id" in frame and "period" in frame:
+        series = trend_data(frame, selected.iloc[0]["company_id"])
+        if len(series) > 1:
+            st.markdown("<div class='panel-header'><h3>Financial trends</h3></div>", unsafe_allow_html=True)
+            metric = st.selectbox("Historical measure", ["Revenue", "Current_Ratio", "Debt_to_Assets", "EBITDA_Margin", "Interest_Coverage"], key="finhealth_trend")
+            fig = px.line(series, x="period", y=metric, markers=True, title=f"{metric.replace('_', ' ')} over time", color_discrete_sequence=[G3])
+            render_chart(fig, height=280)
+        else:
+            st.info("At least two dated company-period records are needed for a trend chart.")
+    st.dataframe(pd.DataFrame([{"Ratio": k, "Value": v if v is not None else "Not available"} for k, v in financial_analysis["ratios"].items()]).astype({"Value": "string"}), width="stretch", hide_index=True)
     disclaimer()
 
 elif page == "Risk Prediction":
     page_header(
-        "Risk Prediction",
-        "Dataset-specific prediction or a transparent rule-based index, with observed drivers.",
+        "Credit Risk",
+        "Dedicated credit-risk assessment of the selected company-period.",
         page="Risk Prediction",
     )
     result = show_risk()
+    st.caption(f"Model used: {'No bundled ML model is applied to uploads (transparent rule-based index).' if not model_available_for_record else 'Existing ML model.'} | Coverage: {current_assessment['coverage_label']}")
+    if not model_available_for_record:
+        st.info("ML cannot produce a calibrated default probability for this upload because no bundled model is applied to unrelated uploaded records. The transparent rule-based index below is the deterministic fallback.")
     health_score = result.get("health_score")
     if health_score is None:
         st.info("There is not enough numeric financial data to calculate a health score.")
