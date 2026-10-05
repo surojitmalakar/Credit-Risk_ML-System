@@ -45,8 +45,10 @@ from msme_ews.calibration import (
 from msme_ews.credit_assessment import apply_scenario_adjustments, generate_risk_interpretation
 from msme_ews.copilot import (
     build_credit_context,
-    generate_dataset_copilot_response,
+    generate_credit_copilot_answer,
     generate_credit_copilot_response,
+    generate_dataset_copilot_answer,
+    generate_dataset_copilot_response,
     suggested_questions,
 )
 from msme_ews.data_intelligence import analyze_dataset
@@ -60,6 +62,7 @@ from msme_ews.financial_analysis import (
     rule_based_assessment,
 )
 from msme_ews.features import engineer_features
+from msme_ews.llm import load_settings
 
 # Streamlit Cloud can serve a partially refreshed revision, so a helper that moves
 # between modules must never take the whole dashboard down. Calibration diagnostics
@@ -164,6 +167,11 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="auto",
 )
+
+# Optional free LLM for the AI Copilot. Reads LLM_API_BASE / LLM_API_KEY /
+# LLM_MODEL / LLM_TIMEOUT from Streamlit secrets or the environment.
+# Leave unconfigured to keep the transparent rule-based engine.
+LLM_SETTINGS = load_settings()
 
 
 def _validate_upload_cache_key(
@@ -397,6 +405,96 @@ def _dataset_label(dataset_key: str) -> str:
     return labels.get(dataset_key, "Current dataset")
 
 
+def page_header(title: str, subtitle: str, page: str | None = None) -> None:
+    st.markdown("<div class='eyebrow'>AI-POWERED MSME FINANCIAL INTELLIGENCE</div>", unsafe_allow_html=True)
+    st.title(title)
+    st.caption(subtitle)
+    if page is not None:
+        st.markdown(page_hero_html(page), unsafe_allow_html=True)
+
+
+def disclaimer() -> None:
+    st.markdown("<div class='risk-note'>Analytical research estimate only. Not a guaranteed prediction, lending recommendation, or financial decision.</div>", unsafe_allow_html=True)
+
+
+def render_about_page() -> None:
+    """About page: static content, available without an upload."""
+    page_header(
+        "About Surojit Malakar",
+        "Finance, research, operations, and technology in service of practical impact.",
+        page="About",
+    )
+    photo_column, intro_column = st.columns([1, 2], gap="large")
+    with photo_column:
+        st.markdown(profile_card_html(), unsafe_allow_html=True)
+    with intro_column:
+        st.subheader("A little about me")
+        st.write(BIO_SUMMARY)
+        st.write(CAREER_INTENT)
+
+    st.markdown(about_tiles_html(), unsafe_allow_html=True)
+    st.markdown(about_block_html("Entrepreneurship & community impact", ENTERPRENEURSHIP), unsafe_allow_html=True)
+    st.markdown(about_block_html("Research & analytical frameworks", RESEARCH_FRAMEWORKS), unsafe_allow_html=True)
+    st.markdown(about_block_html("Experience & interests", EXPERIENCE_INTERESTS), unsafe_allow_html=True)
+
+
+def render_methodology_page(
+    frame: pd.DataFrame | None = None,
+    features: pd.DataFrame | None = None,
+) -> None:
+    """Methodology page: definitions and limitations; feature definitions need an upload."""
+    page_header("Methodology & Research Mode", "Definitions, evaluation choices, limitations, and responsible interpretation.", page="Methodology")
+    st.subheader("Dataset")
+    st.write("All production analysis is based on the active uploaded file. The synthetic dataset generator is retained only for isolated tests and development; it is not loaded by the application.")
+    st.subheader("Model methodology")
+    st.write(
+        "When a usable target is detected, a dataset-specific Random Forest classifier or regressor "
+        "is evaluated using a reproducible 75/25 random hold-out split. Numeric predictors use median "
+        "imputation; categorical predictors use most-frequent imputation and one-hot encoding. "
+        "Identifiers are excluded from predictors. No bundled model is applied to uploaded records."
+    )
+    st.subheader("Evaluation metrics")
+    st.write(
+        "Classification reports accuracy and balanced accuracy; regression reports mean absolute "
+        "error and R². These exploratory hold-out metrics depend on the target definition, sample, "
+        "and split. They are not calibrated probabilities or row-level predictions."
+    )
+    st.subheader("Fairness and sources of bias")
+    st.write("Protected attributes are never model inputs. If supplied for a legitimate audit, held-out group label rates, true-positive rates, and false-positive rates are descriptive only. Selection bias, historical decisions, missingness, sector/geographic representation, and label construction can all produce biased estimates.")
+    st.subheader("Limitations and ethical use")
+    st.write("The score is not causal, calibrated uncertainty, a guaranteed prediction, lending advice, or a decision engine. Validate definitions, data rights, external and temporal performance, subgroup behavior, and calibration with qualified reviewers before any consequential use. Provide human oversight and recourse.")
+    st.subheader("Feature definitions")
+    if frame is not None and features is not None:
+        st.dataframe(pd.DataFrame({"Feature": features.columns, "Definition": ["Raw numeric statement field" if name in frame.columns else "Engineered ratio; see project README" for name in features.columns]}), width="stretch", hide_index=True)
+    else:
+        st.info("Upload a dataset to inspect its detected feature definitions.")
+    st.subheader("Sparse-data risk index")
+    st.write(
+        "The app does not apply a bundled model to uploaded records. Its transparent rule-based risk index "
+        "adds disclosed points only for observed adverse financial conditions, subtracts a limited offset "
+        "for observed strengths, and is bounded between 0 and 100. It is an uncalibrated review signal, "
+        "not a probability of default."
+    )
+    st.dataframe(
+        pd.DataFrame([
+            {"Observed condition": "Current ratio below 1.0x", "Index adjustment": "+22 points"},
+            {"Observed condition": "Current ratio below 1.2x", "Index adjustment": "+10 points"},
+            {"Observed condition": "Debt / equity above 2.0x", "Index adjustment": "+16 points"},
+            {"Observed condition": "Negative equity", "Index adjustment": "+20 points"},
+            {"Observed condition": "Debt / assets at least 0.65x", "Index adjustment": "+18 points"},
+            {"Observed condition": "Negative net profit margin", "Index adjustment": "+15 points"},
+            {"Observed condition": "Negative return on assets", "Index adjustment": "+10 points"},
+            {"Observed condition": "Interest coverage below 1.5x", "Index adjustment": "+12 points"},
+            {"Observed condition": "Revenue growth below -15%", "Index adjustment": "+12 points"},
+            {"Observed condition": "Negative operating cash flow", "Index adjustment": "+15 points"},
+            {"Observed condition": "Observed strengths", "Index adjustment": "Up to -20 points"},
+        ]),
+        width="stretch",
+        hide_index=True,
+    )
+    disclaimer()
+
+
 def _bundle_signature(bundle: dict) -> str:
     """Content fingerprint so cached screening scores invalidate on a new model."""
     report = bundle.get("report", {})
@@ -621,10 +719,19 @@ def _render_data_intelligence(
             st.warning(f"Visual analytics are unavailable for this dataset: {error}")
 
     st.markdown("<div class='panel-header'><h3>Dataset Copilot</h3></div>", unsafe_allow_html=True)
-    st.caption(
-        "Answers are generated deterministically from this upload's profile, statistics, "
-        "risk findings, trends, and detected columns. No external language model is configured."
-    )
+    if LLM_SETTINGS.enabled:
+        st.caption(
+            f"Answers are generated by {LLM_SETTINGS.label} from this upload's "
+            "profile, statistics, risk findings, trends, and detected columns. "
+            "Only compact dataset metadata is sent to the endpoint, never the "
+            "uploaded rows."
+        )
+    else:
+        st.caption(
+            "Answers are generated deterministically from this upload's profile, "
+            "statistics, risk findings, trends, and detected columns. Configure a "
+            "free LLM endpoint (LLM_API_BASE) to enable AI-generated answers."
+        )
     copilot_key = f"dataset_copilot_{content_signature}"
     with st.form(f"dataset_copilot_form_{content_signature}"):
         question = st.text_input(
@@ -634,12 +741,20 @@ def _render_data_intelligence(
         )
         ask_dataset = st.form_submit_button("Ask about dataset")
     if ask_dataset:
-        st.session_state[f"{copilot_key}_answer"] = generate_dataset_copilot_response(
+        answer, answer_source = generate_dataset_copilot_answer(
             question,
             intelligence,
+            llm=LLM_SETTINGS,
         )
+        st.session_state[f"{copilot_key}_answer"] = answer
+        st.session_state[f"{copilot_key}_source"] = answer_source
     if st.session_state.get(f"{copilot_key}_answer"):
         st.info(st.session_state[f"{copilot_key}_answer"])
+        answer_source = st.session_state.get(f"{copilot_key}_source", "rule-based")
+        st.caption(
+            "Answer source: "
+            + (LLM_SETTINGS.label if answer_source == "llm" else "rule-based engine")
+        )
 
     st.markdown("<div class='panel-header'><h3>Reports</h3></div>", unsafe_allow_html=True)
     report_key = (content_signature, revision, filename)
@@ -2277,11 +2392,16 @@ if uploaded is not None:
         st.error(f"Dataset analysis failed: {error}")
         st.stop()
 else:
-    st.info("Upload a dataset to generate analysis.")
-    st.stop()
-
-if page == "Data Intelligence":
-    st.info("Upload and analyze a dataset to open Data Intelligence.")
+    if page == "About":
+        render_about_page()
+    elif page == "Methodology":
+        render_methodology_page()
+    else:
+        st.info("Upload a dataset to generate analysis.")
+        st.caption(
+            f"The '{selected_navigation}' page analyses the active upload. "
+            "About and Methodology are available without data."
+        )
     st.stop()
 
 bundle = get_bundle()
@@ -2477,18 +2597,6 @@ if portfolio_analysis is not None and page == "Executive Overview":
             st.write(note)
 
 
-def page_header(title: str, subtitle: str, page: str | None = None) -> None:
-    st.markdown("<div class='eyebrow'>AI-POWERED MSME FINANCIAL INTELLIGENCE</div>", unsafe_allow_html=True)
-    st.title(title)
-    st.caption(subtitle)
-    if page is not None:
-        st.markdown(page_hero_html(page), unsafe_allow_html=True)
-
-
-def disclaimer() -> None:
-    st.markdown("<div class='risk-note'>Analytical research estimate only. Not a guaranteed prediction, lending recommendation, or financial decision.</div>", unsafe_allow_html=True)
-
-
 def show_risk() -> dict:
     result = current_assessment
     left, middle, right = st.columns(3)
@@ -2609,6 +2717,17 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
             "<div class='creator-credit'>Ask anything about this company's financial health.</div>",
             unsafe_allow_html=True,
         )
+        if LLM_SETTINGS.enabled:
+            st.caption(
+                f"Answers are generated by {LLM_SETTINGS.label}. Only the derived "
+                "credit context for the selected record is sent to the endpoint."
+            )
+        else:
+            st.caption(
+                "Answers come from the built-in rule-based engine. Configure a free "
+                "LLM endpoint (LLM_API_BASE, e.g. a local Ollama server) to enable "
+                "AI-generated answers."
+            )
         copilot_context = build_credit_context(frame, selected, selected_features, flags, row_index, result)
         transcript = st.session_state.setdefault("copilot_history", [])
         prompt_chips = suggested_questions(copilot_context)
@@ -2645,12 +2764,24 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
             response_signature = (*response_signature[:-1], preset)
         if submitted or preset is not None or st.session_state.get("credit_copilot_signature") != response_signature:
             history = [entry["question"] for entry in transcript]
-            response = generate_credit_copilot_response(question, copilot_context, history=history)
-            transcript.append({"question": question, "answer": response, "company": str(selected_company)})
+            with st.spinner("Generating answer..."):
+                response, source = generate_credit_copilot_answer(
+                    question,
+                    copilot_context,
+                    history=history,
+                    llm=LLM_SETTINGS,
+                )
+            transcript.append({"question": question, "answer": response, "company": str(selected_company), "source": source})
             del transcript[:-12]
             st.session_state["credit_copilot_response"] = response
+            st.session_state["credit_copilot_source"] = source
             st.session_state["credit_copilot_signature"] = response_signature
         if st.session_state.get("credit_copilot_response"):
+            answer_source = st.session_state.get("credit_copilot_source", "rule-based")
+            st.caption(
+                "Answer source: "
+                + (LLM_SETTINGS.label if answer_source == "llm" else "rule-based engine")
+            )
             st.markdown(
                 f"<div class='copilot-output'>{escape(st.session_state['credit_copilot_response'])}</div>",
                 unsafe_allow_html=True,
@@ -2663,6 +2794,7 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
             if st.button("Clear conversation", key="copilot_clear"):
                 transcript.clear()
                 st.session_state.pop("credit_copilot_response", None)
+                st.session_state.pop("credit_copilot_source", None)
                 st.session_state.pop("credit_copilot_signature", None)
 
     if page in {"Executive Overview", "AI Copilot"}:
@@ -2931,7 +3063,8 @@ elif page == "Data Explorer":
 
 elif page == "MSME Financial Health":
     page_header("Financial Health", "Deep financial analysis of the selected company-period from observed values.", page="MSME Financial Health")
-    st.caption(f"Company: {company_name} | Period: {selected.iloc[0].get('period', 'Not identified')} | Coverage: {current_assessment['coverage_label']}")
+    health_company = str(frame.iloc[row_index].get("company_id", "Selected Company"))
+    st.caption(f"Company: {health_company} | Period: {selected.iloc[0].get('period', 'Not identified')} | Coverage: {current_assessment['coverage_label']}")
     row = frame.iloc[row_index]
     feat0 = selected_features.iloc[0]
 
@@ -3189,72 +3322,134 @@ elif page == "Model Calibration":
 elif page == "Model Monitoring":
     render_monitoring_page(bundle)
 
-elif page == "Methodology":
-    page_header("Methodology & Research Mode", "Definitions, evaluation choices, limitations, and responsible interpretation.", page="Methodology")
-    st.subheader("Dataset")
-    st.write("All production analysis is based on the active uploaded file. The synthetic dataset generator is retained only for isolated tests and development; it is not loaded by the application.")
-    st.subheader("Model methodology")
-    st.write(
-        "When a usable target is detected, a dataset-specific Random Forest classifier or regressor "
-        "is evaluated using a reproducible 75/25 random hold-out split. Numeric predictors use median "
-        "imputation; categorical predictors use most-frequent imputation and one-hot encoding. "
-        "Identifiers are excluded from predictors. No bundled model is applied to uploaded records."
-    )
-    st.subheader("Evaluation metrics")
-    st.write(
-        "Classification reports accuracy and balanced accuracy; regression reports mean absolute "
-        "error and R². These exploratory hold-out metrics depend on the target definition, sample, "
-        "and split. They are not calibrated probabilities or row-level predictions."
-    )
-    st.subheader("Fairness and sources of bias")
-    st.write("Protected attributes are never model inputs. If supplied for a legitimate audit, held-out group label rates, true-positive rates, and false-positive rates are descriptive only. Selection bias, historical decisions, missingness, sector/geographic representation, and label construction can all produce biased estimates.")
-    st.subheader("Limitations and ethical use")
-    st.write("The score is not causal, calibrated uncertainty, a guaranteed prediction, lending advice, or a decision engine. Validate definitions, data rights, external and temporal performance, subgroup behavior, and calibration with qualified reviewers before any consequential use. Provide human oversight and recourse.")
-    st.subheader("Feature definitions")
-    st.dataframe(pd.DataFrame({"Feature": features.columns, "Definition": ["Raw numeric statement field" if name in frame.columns else "Engineered ratio; see project README" for name in features.columns]}), width="stretch", hide_index=True)
-    st.subheader("Sparse-data risk index")
-    st.write(
-        "The app does not apply a bundled model to uploaded records. Its transparent rule-based risk index "
-        "adds disclosed points only for observed adverse financial conditions, subtracts a limited offset "
-        "for observed strengths, and is bounded between 0 and 100. It is an uncalibrated review signal, "
-        "not a probability of default."
-    )
-    st.dataframe(
-        pd.DataFrame([
-            {"Observed condition": "Current ratio below 1.0x", "Index adjustment": "+22 points"},
-            {"Observed condition": "Current ratio below 1.2x", "Index adjustment": "+10 points"},
-            {"Observed condition": "Debt / equity above 2.0x", "Index adjustment": "+16 points"},
-            {"Observed condition": "Negative equity", "Index adjustment": "+20 points"},
-            {"Observed condition": "Debt / assets at least 0.65x", "Index adjustment": "+18 points"},
-            {"Observed condition": "Negative net profit margin", "Index adjustment": "+15 points"},
-            {"Observed condition": "Negative return on assets", "Index adjustment": "+10 points"},
-            {"Observed condition": "Interest coverage below 1.5x", "Index adjustment": "+12 points"},
-            {"Observed condition": "Revenue growth below -15%", "Index adjustment": "+12 points"},
-            {"Observed condition": "Negative operating cash flow", "Index adjustment": "+15 points"},
-            {"Observed condition": "Observed strengths", "Index adjustment": "Up to -20 points"},
-        ]),
-        width="stretch",
-        hide_index=True,
+elif page == "Portfolio Intelligence":
+    page_header("Portfolio Intelligence", "Entity-level screening summary across the uploaded records.", page="Portfolio Intelligence")
+    scores = _cached_screening_scores(dataset_key, _bundle_signature(bundle))
+    intel = portfolio_intelligence(frame, scores)
+    if not intel.get("available"):
+        st.info(intel.get("reason", "No screening scores are available for this dataset."))
+    else:
+        if not intel["multi_entity"]:
+            st.caption("This dataset contains a single entity, so entity-level comparisons are limited.")
+        intel_metrics = st.columns(4)
+        intel_metrics[0].metric("Entities", f"{intel['entities']:,}")
+        intel_metrics[1].metric("Mean risk index", f"{intel['avg_risk']:.1f}/100" if intel["avg_risk"] is not None else "Not available")
+        intel_metrics[2].metric("Mean health score", f"{intel['avg_health']:.1f}/100" if intel["avg_health"] is not None else "Not available")
+        intel_metrics[3].metric("High-risk share", f"{intel['high_share']:.1%}" if intel["high_share"] is not None else "Not available")
+        st.caption("Screening indices are transparent rule-based scores (0-100), not model default probabilities.")
+        st.markdown("<div class='panel-header'><h3>Risk Band Distribution</h3></div>", unsafe_allow_html=True)
+        st.dataframe(
+            pd.DataFrame([{"Risk band": str(band), "Records": count} for band, count in sorted(intel["bands"].items(), key=lambda item: item[1], reverse=True)]),
+            width="stretch",
+            hide_index=True,
+        )
+        entity_cols = st.columns(2)
+        with entity_cols[0]:
+            st.markdown("<div class='panel-header'><h3>Highest Mean Risk Index</h3></div>", unsafe_allow_html=True)
+            if intel["riskiest"]:
+                st.dataframe(pd.DataFrame(intel["riskiest"], columns=["Entity", "Mean risk index"]), width="stretch", hide_index=True)
+            else:
+                st.info("No entity risk could be calculated from the available fields.")
+        with entity_cols[1]:
+            st.markdown("<div class='panel-header'><h3>Lowest Mean Risk Index</h3></div>", unsafe_allow_html=True)
+            if intel["strongest"]:
+                st.dataframe(pd.DataFrame(intel["strongest"], columns=["Entity", "Mean risk index"]), width="stretch", hide_index=True)
+            else:
+                st.info("No entity risk could be calculated from the available fields.")
+        if intel["largest_entity"]:
+            st.markdown("<div class='panel-header'><h3>Entity Concentration</h3></div>", unsafe_allow_html=True)
+            st.metric("Largest entity share", f"{intel['largest_entity_share']:.1%}")
+            st.caption(f"Largest entity: {intel['largest_entity']}")
+        if intel["concentrations"]:
+            st.markdown("<div class='panel-header'><h3>Segment Concentration</h3></div>", unsafe_allow_html=True)
+            st.dataframe(pd.DataFrame(intel["concentrations"]), width="stretch", hide_index=True)
+        disclaimer()
+
+elif page == "Reports":
+    page_header("Reports", "Export the active upload's analysis, screening, and company reports.", page="Reports")
+    st.caption("Reports are generated locally from the active upload. Each export is built on demand; no data leaves this session.")
+    report_export_cols = st.columns(2)
+    with report_export_cols[0]:
+        st.markdown("<div class='panel-header'><h3>Data Intelligence</h3></div>", unsafe_allow_html=True)
+        st.caption("Dataset profile, detected variables, patterns, and recommendations.")
+        intelligence_report_cache = st.session_state.setdefault("_reports_intelligence_cache", {})
+        intelligence_report = intelligence_report_cache.setdefault(upload_pipeline_key, {})
+        if st.button("Generate Data Intelligence PDF", key="reports_generate_intelligence_pdf"):
+            try:
+                intelligence_report["pdf"] = _cached_intelligence_pdf(
+                    data_intelligence,
+                    uploaded.name,
+                    analysis_revision,
+                    upload_signature,
+                )
+            except Exception as error:
+                st.warning(f"PDF report generation failed: {error}")
+        if "pdf" in intelligence_report:
+            st.download_button(
+                "Download Data Intelligence PDF",
+                data=intelligence_report["pdf"],
+                file_name=f"{Path(uploaded.name).stem}_data_intelligence.pdf",
+                mime="application/pdf",
+                key="reports_download_intelligence_pdf",
+                width="stretch",
+            )
+        if st.button("Generate Data Intelligence Excel", key="reports_generate_intelligence_excel"):
+            try:
+                intelligence_report["excel"] = _cached_intelligence_excel(
+                    data_intelligence,
+                    uploaded.name,
+                    analysis_revision,
+                    upload_signature,
+                )
+            except Exception as error:
+                st.warning(f"Excel report generation failed: {error}")
+        if "excel" in intelligence_report:
+            st.download_button(
+                "Download Data Intelligence Excel",
+                data=intelligence_report["excel"],
+                file_name=f"{Path(uploaded.name).stem}_data_intelligence.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="reports_download_intelligence_excel",
+                width="stretch",
+            )
+    with report_export_cols[1]:
+        st.markdown("<div class='panel-header'><h3>Portfolio Screening</h3></div>", unsafe_allow_html=True)
+        st.caption("Rule-based screening scores, band summary, exposure, and underwriter notes.")
+        reports_exposure_column = detect_exposure_column(frame)
+        st.download_button(
+            "Download screening workbook (Excel)",
+            data=_cached_screening_workbook(
+                dataset_key,
+                _bundle_signature(bundle),
+                reports_exposure_column or "",
+                str(len(st.session_state.get("underwriter_notes", []))),
+            ),
+            file_name="portfolio_screening.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="reports_screening_workbook",
+            width="stretch",
+        )
+        st.download_button(
+            "Download screening report (PDF)",
+            data=_cached_screening_pdf(dataset_key, _bundle_signature(bundle), reports_exposure_column or ""),
+            file_name="portfolio_screening.pdf",
+            mime="application/pdf",
+            key="reports_screening_pdf",
+            width="stretch",
+        )
+    st.markdown("<div class='panel-header'><h3>Company Reports</h3></div>", unsafe_allow_html=True)
+    reports_company = str(frame.iloc[row_index].get("company_id", "Selected Company"))
+    st.caption(
+        f"Credit assessment PDF and Excel analysis for the selected company-period "
+        f"(currently: {reports_company}) are generated on the Executive Overview and "
+        "Credit Assessment pages."
     )
     disclaimer()
 
-elif page == "About":
-    page_header(
-        "About Surojit Malakar",
-        "Finance, research, operations, and technology in service of practical impact.",
-        page="About",
-    )
-    photo_column, intro_column = st.columns([1, 2], gap="large")
-    with photo_column:
-        st.markdown(profile_card_html(), unsafe_allow_html=True)
-    with intro_column:
-        st.subheader("A little about me")
-        st.write(BIO_SUMMARY)
-        st.write(CAREER_INTENT)
+elif page == "Methodology":
+    render_methodology_page(frame, features)
 
-    st.markdown(about_tiles_html(), unsafe_allow_html=True)
-    st.markdown(about_block_html("Entrepreneurship & community impact", ENTERPRENEURSHIP), unsafe_allow_html=True)
-    st.markdown(about_block_html("Research & analytical frameworks", RESEARCH_FRAMEWORKS), unsafe_allow_html=True)
-    st.markdown(about_block_html("Experience & interests", EXPERIENCE_INTERESTS), unsafe_allow_html=True)
+elif page == "About":
+    render_about_page()
 
 st.markdown(site_footer_html(), unsafe_allow_html=True)
