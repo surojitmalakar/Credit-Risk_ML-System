@@ -7,3 +7,7 @@ An upload-driven credit and business data analysis application. The Streamlit ap
 The Streamlit application accepts CSV, XLSX, XLS, and text-based PDF statements. Upload processing runs locally: it reads workbook sheets and PDF tables/text, detects common financial fields, parses Indian-number formats and units, calculates available measures, and reports observed data coverage. Scanned-image PDFs are not OCR processed.
 
 Dataset-specific supervised models are evaluated only when an uploaded dataset contains an evaluable target; these are hold-out metrics, not row-level predictions or calibrated probabilities of default. Where no target is available, the app reports transparent rule-based indices, statistical patterns, and anomaly signals. Rule-based indices are heuristic points, not probabilities of default or lending decisions. PDF and Excel reports are generated from the active upload's analysis.
+
+## Synthetic development data
+
+`python -m msme_ews.demo data/demo_msme.csv --companies 240 --periods 3` (with `src` on `PYTHONPATH`) writes a deterministic synthetic company-period CSV for development and tests. The application never loads it; uploads are the only data source for analysis, and models trained on this generator are flagged and refused by the prediction API.

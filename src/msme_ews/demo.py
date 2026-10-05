@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import numpy as np
@@ -67,3 +68,24 @@ def write_demo_data(path: str | Path, companies: int = 240, periods: int = 3) ->
     output.parent.mkdir(parents=True, exist_ok=True)
     make_demo_data(companies=companies, periods=periods).to_csv(output, index=False)
     return output
+
+
+def main() -> None:
+    """Write a synthetic CSV for development and tests; the app never loads it."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output", nargs="?", default="data/demo_msme.csv", help="Destination CSV path")
+    parser.add_argument("--companies", type=int, default=240)
+    parser.add_argument("--periods", type=int, default=3)
+    parser.add_argument("--seed", type=int, default=42)
+    args = parser.parse_args()
+    frame = make_demo_data(companies=args.companies, periods=args.periods, seed=args.seed)
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(output, index=False)
+    print(f"Wrote {len(frame)} synthetic company-periods to {output}")
+    print(f"Distress label rate: {frame['distress_label'].mean():.1%}")
+    print("Synthetic data only; do not use for real credit decisions.")
+
+
+if __name__ == "__main__":
+    main()

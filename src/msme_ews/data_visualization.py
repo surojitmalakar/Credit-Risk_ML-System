@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import numpy as np
@@ -21,7 +22,35 @@ _FINANCIAL_FIELDS = {
     "current assets": ("current_assets", "current assets"),
     "current liabilities": ("current_liabilities", "current liabilities"),
 }
-_ID_TERMS = ("id", "identifier", "reference", "account", "uuid", "code", "number", "ref")
+# Words that turn a matching name into a different measure: ``Sales_Growth`` is
+# not revenue and ``Current_Assets`` is not total assets. Excluded names are
+# used only as a last resort, except for the current/total pairs below where a
+# partial balance is never shown as a total.
+_FINANCIAL_EXCLUSIONS = {
+    "revenue": ("growth", "net", "profit", "margin", "ratio", "cost", "expense", "tax", "per"),
+    "profit": ("margin", "ratio", "growth"),
+    "debt": ("ratio", "equity", "growth", "service"),
+    "assets": ("current", "ratio", "turnover", "growth"),
+    "liabilities": ("current", "ratio", "growth"),
+    "cash flow": ("ratio", "growth"),
+    "current assets": ("ratio", "growth"),
+    "current liabilities": ("ratio", "growth"),
+}
+_NEVER_SUBSTITUTE = {"assets": "current assets", "liabilities": "current liabilities"}
+_ID_TERMS = ("id", "identifier", "reference", "uuid", "code", "ref")
+
+
+def _name_tokens(column: object) -> list[str]:
+    """Split ``customer_ID`` or ``Customer Id`` into lower-case word tokens."""
+    return [token for token in re.split(r"[^a-z0-9]+", str(column).lower()) if token]
+
+
+def _looks_like_identifier(column: object) -> bool:
+    tokens = _name_tokens(column)
+    return (
+        any(term in tokens for term in _ID_TERMS)
+        or ("account" in tokens and "number" in tokens)
+    )
 
 
 def _meaningful_categories(analysis: dict[str, Any]) -> list[str]:
@@ -31,7 +60,7 @@ def _meaningful_categories(analysis: dict[str, Any]) -> list[str]:
         column for column in analysis["categorical_columns"]
         if column not in identifiers
         and 1 < data[column].nunique(dropna=True) <= 20
-        and not any(term in str(column).lower().split() for term in _ID_TERMS)
+        and not _looks_like_identifier(column)
     ]
 
     def priority(column: str) -> tuple[int, int, int]:
@@ -56,7 +85,7 @@ def _meaningful_numeric(analysis: dict[str, Any]) -> list[str]:
         column for column in analysis["numeric_columns"]
         if column in data
         and data[column].nunique(dropna=True) > 1
-        and not any(term in str(column).lower().split() for term in _ID_TERMS)
+        and not _looks_like_identifier(column)
         and column not in {"anomaly_score"}
     ]
 
@@ -78,6 +107,46 @@ def _meaningful_numeric(analysis: dict[str, Any]) -> list[str]:
         return (importance_rank + int(column in identifiers) * 10, -unique_ratio)
 
     return sorted(candidates, key=priority)
+
+
+def _match_financial_columns(numeric: list[str], role_names: dict[str, str]) -> dict[str, str]:
+    """Pick one column per financial measure, preferring exact measure names.
+
+    A measure is only labelled as one of these when a matching column exists,
+    and a measure is never claimed twice. Names such as ``Sales_Growth`` or
+    ``Net_Income`` are accepted only when nothing better is available, and a
+    current-assets column is never presented as total assets.
+    """
+    selected: dict[str, str] = {}
+    for label, terms in _FINANCIAL_FIELDS.items():
+        exclusions = _FINANCIAL_EXCLUSIONS.get(label, ())
+        claimed = set(selected.values())
+
+        def matches(column: str) -> bool:
+            name = column.lower().replace("_", " ")
+            return any(term in name or term in role_names[column] for term in terms)
+
+        candidates = [column for column in numeric if column not in claimed and matches(column)]
+        preferred = [
+            column for column in candidates
+            if not any(word in column.lower() for word in exclusions)
+            and selected.get(_NEVER_SUBSTITUTE.get(label, "")) != column
+        ]
+        if label in _NEVER_SUBSTITUTE:
+            # ``Current_Assets`` is a partial balance, so it must not stand in
+            # for ``Total_Assets`` even when it is the only candidate.
+            match = preferred[0] if preferred else None
+        else:
+            # Role labels such as "ratio" on ``Cash_Flow_Operations`` describe
+            # the column they sit on and never disqualify it.
+            match = (preferred or candidates or [None])[0]
+        if match:
+            selected[label] = match
+    for field, prefix in (("assets", "Total_Assets"), ("liabilities", "Total_Liabilities")):
+        total_column = next((column for column in numeric if column.lower() == prefix.lower()), None)
+        if total_column:
+            selected[field] = total_column
+    return selected
 
 
 def _layout(figure: go.Figure, height: int = 310) -> go.Figure:
@@ -107,6 +176,8 @@ def build_data_visualizations(analysis: dict[str, Any]) -> dict[str, list[dict[s
     }
     numeric = _meaningful_numeric(analysis)
     categories = _meaningful_categories(analysis)
+    # Infinite values cannot be plotted and would collapse binning and medians.
+    data = data.replace([np.inf, -np.inf], np.nan)
     visual_data = data
     sample_note = ""
     if len(data) > 50_000:
@@ -268,7 +339,7 @@ def build_data_visualizations(analysis: dict[str, Any]) -> dict[str, list[dict[s
                 x=scatter_columns[0],
                 y=scatter_columns[1],
                 color="detected_anomaly",
-                color_discrete_map={"False": _CHART_COLORS[2], "True": _CHART_COLORS[4]},
+                color_discrete_map={True: _CHART_COLORS[4], False: _CHART_COLORS[2]},
                 title=f"Anomalies across numeric variables{scatter_note}",
                 labels={"detected_anomaly": "Anomaly"},
             )
@@ -290,22 +361,7 @@ def build_data_visualizations(analysis: dict[str, Any]) -> dict[str, list[dict[s
         column: " ".join(analysis["roles"].get(column, [])).lower()
         for column in numeric
     }
-    financial_columns: dict[str, str] = {}
-    for label, terms in _FINANCIAL_FIELDS.items():
-        match = next(
-            (
-                column for column in numeric
-                if any(term in column.lower().replace("_", " ") or term in role_names[column] for term in terms)
-            ),
-            None,
-        )
-        if match:
-            financial_columns[label] = match
-    for field, prefix in (("assets", "Total_Assets"), ("liabilities", "Total_Liabilities")):
-        total_name = prefix.lower()
-        total_column = next((column for column in numeric if column.lower() == total_name), None)
-        if total_column:
-            financial_columns[field] = total_column
+    financial_columns = _match_financial_columns(numeric, role_names)
     financial_trends = [label for label in ("revenue", "profit", "debt", "cash flow") if label in financial_columns]
     if date_columns:
         date_column = date_columns[0]
@@ -325,9 +381,12 @@ def build_data_visualizations(analysis: dict[str, Any]) -> dict[str, list[dict[s
             {"Measure": "Assets", "Value": pd.to_numeric(data[financial_columns["assets"]], errors="coerce").sum()},
             {"Measure": "Liabilities", "Value": pd.to_numeric(data[financial_columns["liabilities"]], errors="coerce").sum()},
         ]
+        # Rows are company-periods, so this is the sum of every uploaded value
+        # and not a single-period balance sheet total.
+        chart_title = "Assets vs Liabilities (sum of uploaded values)"
         figure = px.bar(
             pd.DataFrame(rows), x="Measure", y="Value", color="Measure",
-            title="Assets vs Liabilities", color_discrete_sequence=[_CHART_COLORS[2], _CHART_COLORS[4]],
+            title=chart_title, color_discrete_sequence=[_CHART_COLORS[2], _CHART_COLORS[4]],
         )
         charts["Financial Analysis"].append({"title": "Assets vs liabilities", "figure": _layout(figure, 280)})
 

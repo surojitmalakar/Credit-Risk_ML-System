@@ -165,7 +165,9 @@ def _parse_frame(frame: pd.DataFrame) -> tuple[pd.DataFrame, list[str], list[str
                 )
                 date_columns.append(column)
                 continue
-            parsed[original] = pd.to_numeric(source, errors="coerce")
+            parsed[original] = pd.to_numeric(source, errors="coerce").replace(
+                [np.inf, -np.inf], np.nan
+            )
             numeric_columns.append(column)
             continue
         nonempty = source.dropna()
@@ -867,7 +869,7 @@ def analyze_dataset(frame: pd.DataFrame, filename: str = "uploaded_data") -> dic
         and str(column) in numeric
     ]
     for column in exposure_columns[:3]:
-        values = data[column].dropna()
+        values = pd.to_numeric(data[column], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
         total = values.sum()
         if len(values) and total > 0:
             concentration.append({
