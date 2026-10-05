@@ -174,7 +174,6 @@ a { color:var(--g3) !important; }
     background:var(--glass);
 }
 [data-testid="stAlert"] p { color:var(--tx2) !important; }
-    return BAND_COLOURS.get(band, NEUTRAL)
 /* ── Sidebar ── */
 [data-testid="stSidebar"], [data-testid="stSidebarContent"] {
     background:var(--sidebar) !important;
@@ -947,6 +946,51 @@ a { color:var(--g3) !important; }
 .about-tile h4 { margin:.45rem 0 .3rem; font-size:1.1rem; color:var(--g1); }
 .about-tile p { margin:0; font-size:.88rem; color:var(--txm); line-height:1.6; font-weight:300; }
 
+/* ── Site footer ── */
+.site-footer {
+    margin:2rem 0 1.2rem;
+    padding:1.6rem clamp(1rem, 4vw, 2.4rem);
+    background:linear-gradient(135deg,var(--dk2),var(--dk));
+    border-radius:var(--r3);
+    color:rgba(255,255,255,.82);
+    box-shadow:var(--sh2);
+}
+.site-footer .footer-brand {
+    margin:0;
+    font-family:'Cormorant Garamond',serif;
+    font-size:1.35rem;
+    font-weight:700;
+    color:#fff;
+}
+.site-footer .footer-tag {
+    margin:.15rem 0 .9rem;
+    font-size:.74rem;
+    font-weight:600;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--g8);
+}
+.site-footer .footer-row {
+    display:flex;
+    flex-wrap:wrap;
+    gap:.4rem 1.5rem;
+    font-size:.85rem;
+    font-weight:300;
+}
+.site-footer .footer-note {
+    display:flex;
+    flex-wrap:wrap;
+    justify-content:space-between;
+    gap:.4rem 1.5rem;
+    margin-top:1rem;
+    padding-top:.9rem;
+    border-top:1px solid rgba(255,255,255,.14);
+    font-size:.78rem;
+    color:rgba(255,255,255,.6);
+}
+.site-footer a { color:var(--g8); text-decoration:none; }
+.site-footer a:hover { color:#fff; }
+
 /* ── Responsive ── */
 @media (max-width: 767px) {
     [data-testid="stMainBlockContainer"] { padding:1rem clamp(12px, 4vw, 18px) 2rem; }
@@ -1059,11 +1103,11 @@ PAGE_FEATURES: dict[str, dict[str, object]] = {
     },
     "Explainable AI": {
         "icon": "🔬", "accent": G2, "tag": "Attribution",
-"title": "See what the model actually weighed",
+        "title": "See what the model actually weighed",
         "blurb": "Local SHAP contributions for the selected record and global importance across the dataset.",
         "chips": ["Local SHAP bars", "Global importance", "Direction split", "Non-causal caveat"],
     },
-"Early-Warning Indicators": {
+    "Early-Warning Indicators": {
         "icon": "⚠️", "accent": HIGH, "tag": "Warning engine",
         "title": "Catch deterioration before the default",
         "blurb": "Transparent heuristics flag deteriorating conditions and name the value behind each trigger.",
@@ -1273,3 +1317,27 @@ def page_hero_html(page: str) -> str:
         f'<div class="hero-chips">{chips}</div>'
         f'</div></div>'
     )
+
+
+def site_footer_html() -> str:
+    """Return the SkillseED-style footer rendered under every dashboard tab.
+
+    Mirrors the live skillseedindia.com footer: the deep-green brand block, the
+    tagline, contact channels and the standing research-estimate disclaimer.
+    Kept free of Streamlit imports so it can be unit-tested directly.
+    """
+    return f"""
+    <footer class="site-footer">
+        <div class="footer-brand">SkillseED India</div>
+        <div class="footer-tag">Beyond Knowledge Into Action</div>
+        <div class="footer-row">
+            <span>✉ <a href="mailto:skillseedindia@gmail.com">skillseedindia@gmail.com</a></span>
+            <span>🌐 <a href="{escape(PORTFOLIO_URL)}" target="_blank" rel="noopener noreferrer">skillseedindia.com</a></span>
+            <span>📍 Rural Development Center, India</span>
+        </div>
+        <div class="footer-note">
+            <span>Credit Risk AI · analytical research estimates only, not lending decisions.</span>
+            <span>© 2026 SkillseED India · Built by Surojit Malakar</span>
+        </div>
+    </footer>
+    """

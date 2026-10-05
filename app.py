@@ -112,6 +112,29 @@ from msme_ews.table_tools import (
     page_slice,
     search_blob,
 )
+from msme_ews.theme import (
+    BIO_SUMMARY,
+    CAREER_INTENT,
+    CRITICAL,
+    ENTERPRENEURSHIP,
+    EXPERIENCE_INTERESTS,
+    G1,
+    G3,
+    G4,
+    NEUTRAL,
+    RESEARCH_FRAMEWORKS,
+    STYLESHEET,
+    TEXT,
+    TEXT_MUTED,
+    TEXT_STRONG,
+    WHITE,
+    about_block_html,
+    about_tiles_html,
+    band_colour,
+    page_hero_html,
+    profile_card_html,
+    site_footer_html,
+)
 
 st.set_page_config(
     page_title="CREDIT RISK AI",
@@ -563,6 +586,9 @@ def _render_data_intelligence(
                 st.caption(f"Showing up to 6 of {len(chart_items)} relevant charts.")
                 for index, (section, item) in enumerate(chart_items[:6]):
                     st.markdown(f"**{section} · {item['title']}**")
+                    # Re-apply the brand chart frame: these figures are built by
+                    # data_visualization and would otherwise keep their own look.
+                    style_chart(item["figure"])
                     st.plotly_chart(
                         item["figure"],
                         width="stretch",
@@ -645,712 +671,8 @@ def _render_data_intelligence(
         st.caption(warning)
 
 
-st.markdown("""
-<style>
-:root {
-    color-scheme: dark;
-    --page:#07111F;
-    --panel:#0D1B2A;
-    --sidebar:#0B1524;
-    --primary:#2563EB;
-    --primary-soft:#1E40AF;
-    --cyan:#06B6D4;
-    --healthy:#10B981;
-    --warning:#F59E0B;
-    --danger:#EF4444;
-    --text:#F8FAFC;
-    --muted:#94A3B8;
-    --input:#111C2B;
-    --input-hover:#16263A;
-    --input-border:#26384D;
-    --placeholder:#64748B;
-    --border:#1E293B;
-    --shadow:rgba(2, 6, 23, 0.16);
-}
-html, body, [class*="css"] { font-family:'Inter','Manrope',sans-serif; color:var(--text); }
-html, body { width:100%; max-width:100%; overflow-x:hidden; }
-.stApp, [data-testid="stAppViewContainer"] { background:var(--page); }
-header[data-testid="stHeader"] { background:rgba(7, 17, 31, 0.9); }
-h1, h2, h3, h4, h5, h6 { color:var(--text) !important; letter-spacing:-.02em; }
-p, li, label, legend, small, [data-testid="stCaptionContainer"],
-[data-testid="stWidgetLabel"], [data-testid="stMarkdownContainer"],
-[data-testid="stMetricLabel"], [data-testid="stMetricValue"],
-[data-testid="stMetricDelta"], [data-testid="stMarkdownContainer"] *,
-[data-testid="stWidgetLabel"] * { color:var(--text) !important; }
-[data-testid="stCaptionContainer"], .stCaption { color:var(--muted) !important; }
-[data-testid="stMainBlockContainer"] { max-width:100%; padding-top:.8rem; padding-bottom:2rem; }
-[data-testid="stMetric"], [data-testid="stDataFrame"], [data-testid="stTable"],
-[data-testid="stPlotlyChart"], [data-testid="stVerticalBlockBorderWrapper"],
-[data-testid="stExpander"], [data-testid="stForm"], .block-container {
-    min-width:0;
-    background:var(--panel);
-    border:1px solid var(--border);
-    border-radius:16px;
-    box-shadow:0 8px 22px var(--shadow);
-}
-[data-testid="stMetric"] { padding:14px 16px 12px; }
-[data-testid="stMetricLabel"] { color:var(--muted) !important; }
-[data-testid="stMetricValue"] { color:var(--text) !important; }
-[data-testid="stDataFrame"], [data-testid="stTable"] { max-width:100%; overflow-x:auto; }
-[data-testid="stPlotlyChart"] {
-    width:100%;
-    max-width:100%;
-    min-width:0;
-}
-[data-testid="stSidebar"], [data-testid="stSidebarContent"] {
-    background:var(--sidebar) !important;
-    border-right:1px solid #1B2C3E;
-}
-[data-testid="stSidebar"] {
-    min-width:14.5rem !important;
-    max-width:14.5rem !important;
-}
-[data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2,
-[data-testid="stSidebar"] h3, [data-testid="stSidebar"] h4,
-[data-testid="stSidebar"] h5, [data-testid="stSidebar"] h6,
-[data-testid="stSidebar"] p, [data-testid="stSidebar"] small,
-[data-testid="stSidebar"] [data-testid="stWidgetLabel"],
-[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
-    color:#F8FAFC !important;
-}
-[data-testid="stSidebar"] [data-testid="stCaptionContainer"] { color:#CBD5E1 !important; }
-[data-testid="stSidebar"] .eyebrow { color:#94A3B8 !important; }
-[data-testid="stSidebar"] [data-testid="stRadio"] label {
-    color:#E2E8F0 !important;
-    border-radius:10px;
-    padding:.55rem .7rem;
-    border:1px solid rgba(148, 163, 184, 0.15);
-    background:rgba(15, 23, 42, 0.2);
-}
-[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {
-    background:linear-gradient(180deg, var(--primary) 0%, #1D4ED8 100%);
-    border-color:rgba(96, 165, 250, 0.7);
-    color:#FFFFFF !important;
-}
-[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) * {
-    color:#FFFFFF !important;
-}
-[data-testid="stSidebar"] [data-testid="stRadioOption"] > div > div:first-child {
-    display:none;
-}
-[data-testid="stSidebar"] [data-baseweb="select"] > div,
-[data-testid="stSidebar"] [data-testid="stFileUploader"] section,
-[data-testid="stSidebar"] [data-testid="stFileUploader"] div,
-[data-testid="stSidebar"] input,
-[data-testid="stSidebar"] textarea {
-    background:var(--input);
-    border-color:var(--input-border);
-    color:#F8FAFC;
-}
-[data-testid="stSidebar"] [data-baseweb="select"] *,
-[data-testid="stSidebar"] [data-testid="stFileUploader"] * {
-    color:#F8FAFC !important;
-}
-[data-testid="stSidebar"] [data-testid="stFileUploader"] section {
-    border:1px dashed #475569;
-    border-radius:12px;
-}
-[data-testid="stSidebar"] [data-testid="stFileUploader"] button {
-    background:var(--primary) !important;
-    border-color:var(--primary) !important;
-    color:#FFFFFF !important;
-}
-[data-testid="stSelectbox"] [data-baseweb="select"] > div {
-    background:var(--input) !important;
-    background-color:var(--input) !important;
-    border:1px solid var(--input-border) !important;
-    border-radius:10px;
-}
-[data-testid="stSelectbox"] [data-baseweb="select"] > div * {
-    background:var(--input) !important;
-    background-color:var(--input) !important;
-    color:var(--text) !important;
-}
-[data-testid="stSelectbox"] [role="group"] {
-    background:var(--input) !important;
-    border:1px solid var(--input-border) !important;
-    border-radius:10px !important;
-}
-[data-testid="stSelectbox"] [role="combobox"] {
-    background:var(--input) !important;
-    border:0 !important;
-    color:var(--text) !important;
-    -webkit-text-fill-color:var(--text);
-}
-[data-testid="stSelectbox"] button[aria-label="Open"] {
-    background:var(--input) !important;
-    border:0 !important;
-    color:var(--text) !important;
-    border-radius:0 10px 10px 0 !important;
-}
-[data-testid="stSelectbox"] button[aria-label="Open"]:hover {
-    background:var(--input-hover) !important;
-}
-[data-testid="stSelectbox"] [role="group"]:focus-within {
-    background:var(--input-hover) !important;
-    border-color:var(--primary) !important;
-}
-[data-testid="stSelectbox"] [data-baseweb="select"] > div:hover {
-    background:var(--input-hover) !important;
-    background-color:var(--input-hover) !important;
-}
-[data-testid="stSelectbox"] [data-baseweb="select"] *,
-[data-testid="stSelectbox"] input {
-    color:var(--text) !important;
-    -webkit-text-fill-color:var(--text);
-}
-[data-testid="stSelectbox"] input::placeholder,
-[data-testid="stTextInput"] input::placeholder,
-[data-testid="stTextArea"] textarea::placeholder {
-    color:var(--placeholder) !important;
-    -webkit-text-fill-color:var(--placeholder);
-    opacity:1;
-}
-[data-baseweb="popover"] > div,
-[data-baseweb="menu"],
-[role="listbox"] {
-    background:#111827 !important;
-    border:1px solid var(--input-border) !important;
-    color:#E5E7EB !important;
-}
-[role="option"] {
-    background:#111827 !important;
-    color:#E5E7EB !important;
-}
-[role="option"]:hover,
-[role="option"][aria-selected="true"] {
-    background:#1D4ED8 !important;
-    color:#FFFFFF !important;
-}
-[data-testid="stFileUploader"] section {
-    background:var(--input) !important;
-    border:1px dashed var(--input-border) !important;
-    border-radius:12px !important;
-    color:var(--text) !important;
-}
-[data-testid="stFileUploader"] section *,
-[data-testid="stFileUploader"] [data-testid="stMarkdownContainer"] {
-    color:var(--text) !important;
-}
-[data-testid="stFileChip"] {
-    background:var(--input) !important;
-    border:1px solid var(--input-border) !important;
-    color:var(--text) !important;
-}
-[data-testid="stFileChip"] [data-testid="stFileChipName"],
-[data-testid="stFileChip"] [data-testid="stFileChipDeleteBtn"] {
-    color:var(--text) !important;
-}
-[data-testid="stFileChip"] > div:first-of-type {
-    background:#26384D !important;
-}
-[data-testid="stFileUploader"] small,
-[data-testid="stFileUploader"] [data-testid="stCaptionContainer"] {
-    color:var(--muted) !important;
-}
-[data-testid="stFileUploader"] button {
-    background:var(--primary) !important;
-    border:1px solid var(--primary) !important;
-    border-radius:8px !important;
-    color:#FFFFFF !important;
-}
-[data-testid="stFileUploader"] button:hover {
-    background:#1D4ED8 !important;
-}
-.stApp input,
-.stApp textarea,
-.stApp [data-baseweb="input"] > div,
-.stApp [data-baseweb="textarea"] {
-    background:var(--input);
-    border-color:var(--input-border);
-    color:var(--text);
-}
-.stApp input:focus,
-.stApp textarea:focus,
-.stApp [data-baseweb="input"]:focus-within,
-.stApp [data-baseweb="textarea"]:focus-within,
-.stApp [data-testid="stSelectbox"]:focus-within [data-baseweb="select"] > div {
-    background:var(--input-hover);
-    border-color:var(--primary) !important;
-    outline:none;
-}
-.eyebrow { font:600 11px 'Inter','Manrope',sans-serif; color:#94A3B8; text-transform:uppercase; letter-spacing:.08em; }
-.topbar {
-    display:flex;
-    flex-wrap:wrap;
-    justify-content:space-between;
-    align-items:center;
-    gap:.75rem;
-    padding:.25rem 0 .65rem;
-}
-.topbar-brand h1 {
-    margin:0;
-    font-size:clamp(2rem, 4vw, 3rem);
-    line-height:1.05;
-    letter-spacing:-0.045em;
-    font-weight:800;
-}
-.topbar-brand .subtitle {
-    margin-top:.35rem;
-    color:var(--muted);
-    font-size:.96rem;
-}
-.live-badge {
-    display:inline-flex;
-    align-items:center;
-    gap:.5rem;
-    padding:.3rem .7rem;
-    border-radius:999px;
-    background:rgba(16, 185, 129, 0.12);
-    border:1px solid rgba(16, 185, 129, 0.38);
-    color:#A7F3D0;
-    font:600 11px 'Inter','Manrope',sans-serif;
-    letter-spacing:.06em;
-    text-transform:uppercase;
-}
-.live-badge::before {
-    content:"";
-    width:.55rem;
-    height:.55rem;
-    border-radius:50%;
-    background:var(--healthy);
-    box-shadow:0 0 0 4px rgba(16, 185, 129, 0.12);
-}
-.kpi-card {
-    background:var(--panel);
-    border:1px solid var(--border);
-    border-radius:14px;
-    padding:.8rem .9rem;
-    min-height:118px;
-    position:relative;
-    border-top:2px solid var(--kpi-accent, var(--primary));
-}
-.kpi-label {
-    color:var(--muted);
-    font-size:.74rem;
-    font-weight:600;
-    letter-spacing:.02em;
-}
-.kpi-value {
-    margin-top:.4rem;
-    font-size:clamp(1.55rem, 2.6vw, 2rem);
-    font-weight:800;
-    letter-spacing:-.04em;
-}
-.kpi-trend {
-    margin-top:.3rem;
-    display:inline-flex;
-    align-items:center;
-    gap:.4rem;
-    padding:.25rem .55rem;
-    border-radius:999px;
-    font:600 12px 'Inter','Manrope',sans-serif;
-    background:rgba(148, 163, 184, 0.08);
-    border:1px solid rgba(148, 163, 184, 0.14);
-}
-.kpi-trend.healthy { color:#A7F3D0; }
-.kpi-trend.watch { color:#FCD34D; }
-.kpi-trend.high { color:#FDBA74; }
-.kpi-trend.critical { color:#FCA5A5; }
-.kpi-trend.neutral { color:#BFDBFE; }
-.kpi-card.healthy { --kpi-accent:var(--healthy); }
-.kpi-card.watch { --kpi-accent:var(--warning); }
-.kpi-card.high { --kpi-accent:#F97316; }
-.kpi-card.critical { --kpi-accent:var(--danger); }
-.kpi-card.neutral { --kpi-accent:var(--cyan); }
-.risk-note {
-    border:1px solid rgba(239, 68, 68, 0.32);
-    border-left:4px solid var(--danger);
-    border-radius:18px;
-    padding:1rem 1.1rem;
-    background:rgba(127, 29, 29, 0.18);
-    color:#FECACA;
-}
-.risk-category-card {
-    min-height:100%;
-    padding:1rem 1.1rem;
-    background:var(--panel);
-    border:1px solid var(--border);
-    border-radius:18px;
-}
-.risk-category-label { color:var(--muted) !important; font-size:.78rem; letter-spacing:.04em; font-family:'Inter','Manrope',sans-serif; }
-.risk-category-value {
-    display:inline-flex;
-    margin-top:.65rem;
-    padding:.42rem .7rem;
-    border-radius:999px;
-    font-size:1.2rem;
-    font-weight:800;
-    letter-spacing:.03em;
-}
-.risk-category-value.healthy { background:rgba(16, 185, 129, 0.14); color:#A7F3D0 !important; }
-.risk-category-value.watch { background:rgba(245, 158, 11, 0.12); color:#FCD34D !important; }
-.risk-category-value.high { background:rgba(249, 115, 22, 0.12); color:#FDBA74 !important; }
-.risk-category-value.critical { background:rgba(239, 68, 68, 0.12); color:#FCA5A5 !important; }
-.risk-category-value.neutral { background:rgba(148, 163, 184, 0.12); color:#E2E8F0 !important; }
-.panel-header {
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    gap:1rem;
-    margin:1rem 0 .55rem;
-    padding:0;
-}
-.panel-header h3 {
-    margin:0;
-    font-size:1.15rem;
-    letter-spacing:-0.03em;
-}
-.panel {
-    background:var(--panel);
-    border:1px solid var(--border);
-    border-radius:16px;
-    padding:.8rem;
-    box-shadow:0 8px 22px var(--shadow);
-}
-.copilot-box {
-    background:var(--panel);
-    border:1px solid rgba(59, 130, 246, 0.24);
-    border-radius:16px;
-    padding:.85rem;
-}
-.copilot-input {
-    background:#07111F !important;
-    color:var(--text) !important;
-    border:1px solid rgba(96, 165, 250, 0.22) !important;
-    border-radius:12px !important;
-    min-height:76px !important;
-}
-.copilot-output {
-    background:#07111F;
-    border:1px solid rgba(148, 163, 184, 0.18);
-    border-radius:14px;
-    padding:.75rem .85rem;
-    color:#E2E8F0;
-    line-height:1.6;
-}
-.chart-card {
-    background:var(--panel);
-    border:1px solid var(--border);
-    border-radius:18px;
-    padding:1rem;
-    box-shadow:0 18px 40px var(--shadow);
-}
-.risk-summary-card {
-    background:var(--panel);
-    border:1px solid var(--border);
-    border-left:3px solid var(--risk-accent, var(--cyan));
-    border-radius:14px;
-    padding:.8rem .9rem;
-}
-.risk-summary-card.healthy { --risk-accent:var(--healthy); }
-.risk-summary-card.watch { --risk-accent:var(--warning); }
-.risk-summary-card.high { --risk-accent:#F97316; }
-.risk-summary-card.critical { --risk-accent:var(--danger); }
-.risk-summary-card .risk-state {
-    display:flex;
-    align-items:center;
-    gap:.45rem;
-    font-weight:700;
-    margin-bottom:.35rem;
-}
-.risk-summary-card .risk-state::before {
-    content:"";
-    width:.58rem;
-    height:.58rem;
-    flex:0 0 .58rem;
-    border-radius:50%;
-    background:var(--risk-accent, var(--cyan));
-}
-.risk-summary-card p { color:var(--muted) !important; margin:.3rem 0; line-height:1.5; }
-.driver-legend { color:var(--muted); font-size:.78rem; margin:.1rem 0 .45rem; }
-.signal-list { display:grid; gap:.45rem; }
-.signal-item {
-    display:flex;
-    align-items:flex-start;
-    gap:.55rem;
-    padding:.55rem .65rem;
-    border:1px solid var(--border);
-    border-radius:11px;
-    background:var(--panel);
-    line-height:1.35;
-}
-.signal-indicator {
-    flex:0 0 .58rem;
-    width:.58rem;
-    height:.58rem;
-    margin-top:.28rem;
-    border-radius:50%;
-    background:var(--signal-color, var(--muted));
-}
-.signal-indicator.healthy { --signal-color:var(--healthy); }
-.signal-indicator.watch { --signal-color:var(--warning); }
-.signal-indicator.warning { --signal-color:#F97316; }
-.signal-indicator.critical { --signal-color:var(--danger); }
-.signal-item strong { display:block; font-size:.88rem; color:var(--text); }
-.signal-item span { display:block; color:var(--muted); font-size:.78rem; margin-top:.08rem; }
-.creator-credit { color:var(--muted); font-size:.75rem; font-weight:500; }
-.main .stButton button, [data-testid="stFormSubmitButton"] button { width:100%; }
-.assessment-card {
-    background:var(--panel);
-    border:1px solid var(--border);
-    border-radius:16px;
-    padding:1rem 1.1rem;
-    margin:.75rem 0 1rem;
-    box-shadow:0 8px 22px var(--shadow);
-}
-.assessment-card h3 {
-    margin:0 0 .9rem;
-    font-size:1.12rem;
-    letter-spacing:0.08em;
-    text-transform:uppercase;
-    color:#E2E8F0;
-}
-.assessment-grid {
-    display:grid;
-    grid-template-columns:repeat(3, minmax(0, 1fr));
-    gap:1rem;
-    margin-bottom:1rem;
-}
-.assessment-item {
-    padding:.7rem .75rem;
-    border-radius:12px;
-    background:rgba(15, 23, 42, 0.55);
-    border:1px solid rgba(148, 163, 184, 0.14);
-}
-.assessment-label {
-    font:600 11px 'Inter','Manrope',sans-serif;
-    color:#94A3B8;
-    letter-spacing:.08em;
-    text-transform:uppercase;
-}
-.assessment-value {
-    margin-top:.35rem;
-    font-size:1.15rem;
-    font-weight:800;
-    color:#F8FAFC;
-}
-.assessment-meta {
-    display:grid;
-    grid-template-columns:repeat(2, minmax(0, 1fr));
-    gap:1rem;
-    margin-top:.5rem;
-}
-.assessment-block {
-    background:rgba(15, 23, 42, 0.5);
-    border:1px solid rgba(148, 163, 184, 0.14);
-    border-radius:12px;
-    padding:.8rem .9rem;
-}
-.assessment-block h4 {
-    margin:0 0 .5rem;
-    font-size:.8rem;
-    letter-spacing:.08em;
-    text-transform:uppercase;
-    color:#94A3B8;
-    font-family:'Inter','Manrope',sans-serif;
-}
-.assessment-bullets {
-    list-style:none;
-    padding:0;
-    margin:0;
-    color:#E2E8F0;
-}
-.assessment-bullets li {
-    display:flex;
-    align-items:center;
-    gap:.55rem;
-    margin:.35rem 0;
-    line-height:1.4;
-}
-.assessment-bullets li::before {
-    content:"";
-    width:.48rem;
-    height:.48rem;
-    flex:0 0 .48rem;
-    border-radius:50%;
-    background:var(--healthy);
-}
-.assessment-bullets.risk li::before {
-    background:var(--warning);
-}
-.assessment-recommendation {
-    margin-top:1rem;
-    padding:.9rem 1rem;
-    border-left:4px solid #06B6D4;
-    border-radius:12px;
-    background:rgba(6, 182, 212, 0.08);
-    color:#E0F2FE;
-    line-height:1.6;
-    font-weight:600;
-}
-.assessment-priorities {
-    margin-top:1rem;
-    background:rgba(15, 23, 42, 0.45);
-    border:1px solid rgba(148, 163, 184, 0.14);
-    border-radius:12px;
-    padding:.8rem .9rem;
-}
-.assessment-priorities ol {
-    margin:.5rem 0 0 1.1rem;
-    padding:0;
-    color:#E2E8F0;
-}
-.workflow-wrapper {
-    margin:1rem 0 1.5rem;
-}
-.workflow-grid {
-    display:grid;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
-    gap:.85rem;
-    align-items:stretch;
-    margin-top:.6rem;
-}
-.workflow-step {
-    position:relative;
-    background:var(--panel);
-    border:1px solid rgba(96, 165, 250, 0.18);
-    border-radius:14px;
-    padding:.8rem .7rem;
-    min-height:108px;
-    display:flex;
-    flex-direction:column;
-    justify-content:center;
-    text-align:center;
-    color:#E2E8F0;
-}
-.workflow-step .title {
-    font-size:0.82rem;
-    font-weight:700;
-    line-height:1.4;
-}
-.workflow-step .tag {
-    display:inline-block;
-    margin-top:.4rem;
-    font:600 10px 'Inter','Manrope',sans-serif;
-    letter-spacing:.08em;
-    color:#94A3B8;
-    text-transform:uppercase;
-}
-.workflow-step::after {
-    content:"↓";
-    position:absolute;
-    right:-0.55rem;
-    top:50%;
-    transform:translateY(-50%);
-    color:#60A5FA;
-    font-weight:800;
-    font-size:1.1rem;
-}
-.workflow-step:last-child::after { content:""; }
-.feature-row {
-    display:flex;
-    flex-wrap:wrap;
-    gap:.55rem;
-    margin-top:.75rem;
-}
-.feature-pill {
-    display:inline-flex;
-    align-items:center;
-    padding:.38rem .7rem;
-    border-radius:999px;
-    background:rgba(37, 99, 235, 0.12);
-    border:1px solid rgba(96, 165, 250, 0.22);
-    color:#DBEAFE;
-    font:600 12px 'Inter','Manrope',sans-serif;
-    letter-spacing:.04em;
-}
-@media (max-width: 767px) {
-    .assessment-grid,
-    .assessment-meta,
-    .workflow-grid {
-        grid-template-columns:1fr;
-    }
-    .workflow-step::after {
-        content:"";
-    }
-}
-.stApp button, .stApp [role="button"] {
-    min-height:44px;
-    color:var(--text) !important;
-    border-color:var(--border) !important;
-}
-.stApp [data-testid="stDownloadButton"] button,
-.stApp [data-testid="stFormSubmitButton"] button,
-.stApp [data-testid="baseButton-secondary"] button {
-    background:linear-gradient(180deg, var(--primary) 0%, #1D4ED8 100%);
-    border-color:rgba(96, 165, 250, 0.8);
-    color:#FFFFFF !important;
-}
-.stApp input, .stApp textarea, .stApp [data-baseweb="select"] * { color:var(--text); }
-.stApp [data-testid="stImage"] img { max-width:100%; height:auto; object-fit:contain; }
-[data-testid="stAlert"] { border-radius:12px; }
-[data-testid="stAlert"] p { color:var(--text) !important; }
-@media (max-width: 767px) {
-    html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"],
-    [data-testid="stMainBlockContainer"] {
-        width:100%;
-        max-width:100%;
-        min-width:0;
-        overflow-x:hidden;
-    }
-    [data-testid="stMainBlockContainer"] {
-        padding:1rem clamp(12px, 4vw, 18px) 2rem;
-    }
-    [data-testid="stHorizontalBlock"] {
-        flex-wrap:wrap;
-        gap:.65rem;
-        min-width:0;
-    }
-    [data-testid="stHorizontalBlock"] > [data-testid="column"] {
-        flex:1 1 100% !important;
-        width:100% !important;
-        min-width:0 !important;
-    }
-    [data-testid="stSidebar"][aria-expanded="true"] {
-        width:min(72vw, 16rem) !important;
-        min-width:min(72vw, 16rem) !important;
-        max-width:72vw !important;
-    }
-    [data-testid="stSidebar"] { min-width:0 !important; max-width:none !important; }
-    [data-testid="stSelectbox"],
-    [data-testid="stFileUploader"],
-    [data-baseweb="popover"],
-    [role="listbox"] {
-        width:100%;
-        max-width:100vw;
-        min-width:0;
-    }
-    [role="listbox"] { max-height:min(55vh, 24rem); overflow-y:auto; }
-    [data-testid="stFileUploader"] section { padding:.75rem !important; }
-    [data-testid="stFileUploader"] button { min-height:42px; }
-    [data-testid="stMetric"] { width:100%; padding:14px; }
-    .kpi-card { min-height:0; padding:.75rem .8rem; }
-    .topbar { padding:.15rem 0 .4rem; }
-    .topbar-brand .subtitle { font-size:.86rem; line-height:1.4; max-width:32rem; }
-    .panel-header { margin:.8rem 0 .45rem; }
-    .panel { padding:.65rem; }
-    .assessment-card { padding:.85rem; margin:.7rem 0 1rem; }
-    [data-testid="stDataFrame"], [data-testid="stTable"] {
-        max-width:100%;
-        overflow-x:auto;
-        white-space:nowrap;
-    }
-    [data-testid="stPlotlyChart"], [data-testid="stImage"],
-    [data-testid="stFileUploader"], [data-baseweb="select"] {
-        width:100%;
-        max-width:100%;
-        min-width:0;
-    }
-    [data-testid="stFileUploader"] section { width:100%; }
-    [data-testid="stImage"] img { width:auto; max-width:min(100%, 220px); }
-    .stApp button, .stApp [role="button"] { min-height:44px; }
-    h1 { font-size:clamp(1.65rem, 7vw, 2.1rem); }
-    h2 { font-size:clamp(1.3rem, 5.5vw, 1.65rem); }
-    h3 { font-size:clamp(1.1rem, 4.5vw, 1.35rem); }
-}
-</style>
-""", unsafe_allow_html=True)
+st.markdown(STYLESHEET, unsafe_allow_html=True)
+
 
 
 def style_chart(
@@ -1360,35 +682,37 @@ def style_chart(
     margin: dict[str, int] | None = None,
 ) -> None:
     figure.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="#0D1B2A",
-        plot_bgcolor="#0D1B2A",
-        font={"family": "Inter, Manrope, sans-serif", "color": "#F8FAFC", "size": 12},
-        title_font={"color": "#F8FAFC", "size": 16},
+        template="plotly_white",
+        paper_bgcolor=WHITE,
+        plot_bgcolor=WHITE,
+        font={"family": "Outfit, sans-serif", "color": TEXT, "size": 12},
+        title_font={"color": TEXT, "size": 16},
         legend={
-            "font": {"color": "#F8FAFC", "size": 12},
-            "bgcolor": "#0D1B2A",
-            "bordercolor": "#1E293B",
+            "font": {"color": TEXT, "size": 12},
+            "bgcolor": WHITE,
+            "bordercolor": "rgba(16,185,129,.18)",
             "borderwidth": 1,
         },
         margin=margin or {"t": 36, "r": 12, "b": 38, "l": 12},
-        height=height,
+        # Keep the figure's own height (auto-generated charts pre-size
+        # themselves in ``data_visualization._layout``) unless one is given.
+        height=height if height is not None else figure.layout.height,
         autosize=True,
     )
     figure.update_xaxes(
-        color="#E2E8F0",
-        title_font={"color": "#E2E8F0"},
-        tickfont={"color": "#94A3B8"},
-        gridcolor="rgba(148, 163, 184, 0.12)",
-        zerolinecolor="rgba(148, 163, 184, 0.24)",
+        color=TEXT_STRONG,
+        title_font={"color": TEXT_STRONG},
+        tickfont={"color": TEXT_MUTED},
+        gridcolor="rgba(16, 185, 129, 0.14)",
+        zerolinecolor="rgba(16, 185, 129, 0.28)",
         automargin=True,
     )
     figure.update_yaxes(
-        color="#E2E8F0",
-        title_font={"color": "#E2E8F0"},
-        tickfont={"color": "#94A3B8"},
-        gridcolor="rgba(148, 163, 184, 0.12)",
-        zerolinecolor="rgba(148, 163, 184, 0.24)",
+        color=TEXT_STRONG,
+        title_font={"color": TEXT_STRONG},
+        tickfont={"color": TEXT_MUTED},
+        gridcolor="rgba(16, 185, 129, 0.14)",
+        zerolinecolor="rgba(16, 185, 129, 0.28)",
         automargin=True,
     )
 
@@ -1464,7 +788,7 @@ def render_shap_drivers(result: dict) -> None:
         y="Feature",
         color="Direction",
         orientation="h",
-        color_discrete_map={"Risk increased": "#EF4444", "Risk reduced": "#10B981"},
+        color_discrete_map={"Risk increased": CRITICAL, "Risk reduced": G4},
         category_orders={"Direction": ["Risk increased", "Risk reduced"]},
     )
     figure.update_layout(
@@ -1653,7 +977,7 @@ def render_credit_assessment_panel(company_name: str, result: dict, selected_fea
             </div>
             <div class="assessment-recommendation">{recommendation}</div>
             <div class="assessment-priorities">
-                <h4 style="margin:0; font-size:.8rem; letter-spacing:.04em; color:#94A3B8; font-family:'Inter','Manrope',sans-serif;">Early-warning priorities</h4>
+                <h4>Early-warning priorities</h4>
                 <ol>
                     {''.join(f'<li>{item}</li>' for item in priorities)}
                 </ol>
@@ -1699,12 +1023,8 @@ def render_ai_risk_interpretation(
 
 
 def _band_colour(band: str) -> str:
-    return {
-        "Low Risk": "#10B981",
-        "Moderate Risk": "#F59E0B",
-        "High Risk": "#F97316",
-        "Critical Risk": "#EF4444",
-    }.get(band, "#94A3B8")
+    """Return the brand colour for a risk band; kept as a thin alias over the theme."""
+    return band_colour(band)
 
 
 def _record_label(frame: pd.DataFrame, position: int) -> str:
@@ -1839,6 +1159,7 @@ def render_screening_page(frame: pd.DataFrame, features: pd.DataFrame, flags: pd
         "Portfolio Screening",
         "Every record is scored in one vectorized pass, so a whole file can be ranked without "
         "opening each company-period.",
+        page="Portfolio Screening",
     )
     scores = _cached_screening_scores(dataset_key, _bundle_signature(bundle))
     if scores.empty:
@@ -1986,6 +1307,7 @@ def render_comparison_page(frame: pd.DataFrame, features: pd.DataFrame, flags: p
     page_header(
         "Compare Records",
         "Place up to four company-periods side by side to see where their risk differs.",
+        page="Compare Records",
     )
     limit = min(len(company_rows), 4)
     options = list(company_rows)[: max(1, min(len(company_rows), 500))]
@@ -2084,7 +1406,7 @@ def render_comparison_page(frame: pd.DataFrame, features: pd.DataFrame, flags: p
                     x="period",
                     y=metric,
                     markers=True,
-                    color_discrete_sequence=["#2563EB"],
+                    color_discrete_sequence=[G3],
                     title=f"{metric.replace('_', ' ')} over time",
                 )
                 render_chart(trend_figure, height=300)
@@ -2098,6 +1420,7 @@ def render_data_explorer(frame: pd.DataFrame) -> None:
         "Data Explorer",
         "Search, filter, sort, and page through the loaded records without sending the whole "
         "table to the browser.",
+        page="Data Explorer",
     )
     filtered, visible = render_filtered_grid(frame, "explorer")
     st.dataframe(
@@ -2141,6 +1464,7 @@ def render_monitoring_page(bundle: dict) -> None:
         "Dataset Monitoring",
         "Compare successive analyses of the active dataset and track its data quality, feature "
         "distributions, and transparent rule-index movements.",
+        page="Model Monitoring",
     )
     history = st.session_state.get("_monitor_history", [])
     if len(history) < 1:
@@ -2197,7 +1521,7 @@ def render_monitoring_page(bundle: dict) -> None:
                 x="Revision",
                 y="Elevated share",
                 markers=True,
-                color_discrete_sequence=["#2563EB"],
+                color_discrete_sequence=[G3],
                 title="Share of records with rule index >=60 by revision",
             )
             figure.update_yaxes(tickformat=".0%")
@@ -2230,6 +1554,7 @@ def render_stress_page(
         "Stress Testing",
         "Combine revenue, margin, leverage, interest, and liquidity shocks in a single "
         "multi-factor grid, then isolate each lever to see what actually moves the estimate.",
+        page="Stress Testing",
     )
     factors = available_factors(frame.iloc[row_index])
     if not factors:
@@ -2320,7 +1645,7 @@ def render_stress_page(
             x=["Downside move", "Upside move"],
             y="Factor",
             orientation="h",
-            color_discrete_sequence=["#DC2626", "#16A34A"],
+            color_discrete_sequence=[CRITICAL, G4],
             title="Change in rule-based risk index under each offered scenario",
         )
         figure.update_xaxes(title_text="Change in index points")
@@ -2392,6 +1717,7 @@ def render_calibration_page(frame: pd.DataFrame, bundle: dict) -> None:
         "Model Calibration",
         "Compare predicted risk with observed outcomes, then move the risk-band cutoffs to see "
         "how the portfolio would be reclassified.",
+        page="Model Calibration",
     )
     if bundle.get("model") is None:
         st.info(
@@ -2440,11 +1766,11 @@ def render_calibration_page(frame: pd.DataFrame, bundle: dict) -> None:
         x="Predicted default rate",
         y="Observed default rate",
         markers=True,
-        color_discrete_sequence=["#2563EB"],
+        color_discrete_sequence=[G3],
         title="Predicted versus observed default rate",
     )
     maximum = max(float(table["Predicted default rate"].max()), float(table["Observed default rate"].max()), 0.01)
-    figure.add_shape(type="line", x0=0, y0=0, x1=maximum, y1=maximum, line=dict(dash="dash", color="#94A3B8"))
+    figure.add_shape(type="line", x0=0, y0=0, x1=maximum, y1=maximum, line=dict(dash="dash", color=NEUTRAL))
     figure.update_xaxes(title_text="Predicted default rate %", range=[0, maximum * 1.1])
     figure.update_yaxes(title_text="Observed default rate %", range=[0, maximum * 1.1])
     render_chart(figure, height=300)
@@ -2486,7 +1812,7 @@ def render_calibration_page(frame: pd.DataFrame, bundle: dict) -> None:
         y="value",
         color="variable",
         barmode="group",
-        color_discrete_sequence=["#94A3B8", "#2563EB"],
+        color_discrete_sequence=[NEUTRAL, G3],
         title="Records per band: default versus tuned cutoffs",
     )
     render_chart(band_figure, height=280)
@@ -2813,6 +2139,7 @@ if uploaded is not None:
                         strict=False,
                     ):
                         with chart_col:
+                            style_chart(chart_item["figure"])
                             st.plotly_chart(
                                 chart_item["figure"],
                                 width="stretch",
@@ -3126,10 +2453,12 @@ if portfolio_analysis is not None and page == "Executive Overview":
             st.write(note)
 
 
-def page_header(title: str, subtitle: str) -> None:
+def page_header(title: str, subtitle: str, page: str | None = None) -> None:
     st.markdown("<div class='eyebrow'>AI-POWERED MSME FINANCIAL INTELLIGENCE</div>", unsafe_allow_html=True)
     st.title(title)
     st.caption(subtitle)
+    if page is not None:
+        st.markdown(page_hero_html(page), unsafe_allow_html=True)
 
 
 def disclaimer() -> None:
@@ -3410,7 +2739,7 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
             st.info("No risk driver could be calculated from the available fields.")
 
     if page == "Scenario Simulator":
-        page_header("Scenario Simulator", "Explore how adjusted financial assumptions change the model's estimate.")
+        page_header("Scenario Simulator", "Explore how adjusted financial assumptions change the model's estimate.", page="Scenario Simulator")
         st.caption("Adjust one-period assumptions to recalculate observed financial values and the rule-based risk index. Margin change is in percentage points; revenue and debt changes are relative percentages.")
         with st.form("credit_scenario"):
             scenario_cols = st.columns(3)
@@ -3528,7 +2857,7 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
                     x="period",
                     y="Revenue",
                     markers=True,
-                    color_discrete_sequence=["#2563EB"],
+                    color_discrete_sequence=[G3],
                 )
                 revenue_chart.update_layout(title="Revenue", yaxis_title=None)
                 with trend_cols[0]:
@@ -3539,7 +2868,7 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
                     x="period",
                     y="Current_Ratio",
                     markers=True,
-                    color_discrete_sequence=["#06B6D4"],
+                    color_discrete_sequence=[G4],
                 )
                 liquidity_chart.update_layout(title="Current ratio", yaxis_title=None)
                 with trend_cols[1]:
@@ -3577,7 +2906,7 @@ elif page == "Data Explorer":
     disclaimer()
 
 elif page == "MSME Financial Health":
-    page_header("MSME Financial Health", "Extracted statement inputs, available-data coverage, and derived ratios.")
+    page_header("MSME Financial Health", "Extracted statement inputs, available-data coverage, and derived ratios.", page="MSME Financial Health")
     financial_summary = pd.concat(
         [selected.reset_index(drop=True), selected_features.reset_index(drop=True)],
         axis=1,
@@ -3599,6 +2928,7 @@ elif page == "Risk Prediction":
     page_header(
         "Risk Prediction",
         "Dataset-specific prediction or a transparent rule-based index, with observed drivers.",
+        page="Risk Prediction",
     )
     result = show_risk()
     health_score = result.get("health_score")
@@ -3608,12 +2938,12 @@ elif page == "Risk Prediction":
         gauge = go.Figure(go.Indicator(
             mode="gauge+number",
             value=health_score,
-            number={"suffix": "%", "font": {"color": "#F8FAFC", "size": 42}},
-            title={"text": "Financial health score", "font": {"color": "#F8FAFC", "size": 18}},
+            number={"suffix": "%", "font": {"color": G1, "size": 42}},
+            title={"text": "Financial health score", "font": {"color": G1, "size": 18}},
             gauge={
-                "axis": {"range": [0, 100], "ticksuffix": "%", "tickcolor": "#94A3B8"},
-                "bar": {"color": "#10B981", "thickness": 0.25},
-                "bgcolor": "#0D1B2A",
+                "axis": {"range": [0, 100], "ticksuffix": "%", "tickcolor": NEUTRAL},
+                "bar": {"color": G4, "thickness": 0.25},
+                "bgcolor": WHITE,
                 "borderwidth": 0,
                 "steps": [
                     {"range": [0, 40], "color": "rgba(239, 68, 68, 0.18)"},
@@ -3621,7 +2951,7 @@ elif page == "Risk Prediction":
                     {"range": [70, 100], "color": "rgba(16, 185, 129, 0.18)"},
                 ],
                 "threshold": {
-                    "line": {"color": "#F8FAFC", "width": 3},
+                    "line": {"color": G1, "width": 3},
                     "thickness": 0.8,
                     "value": health_score,
                 },
@@ -3642,7 +2972,7 @@ elif page == "Risk Prediction":
         st.dataframe(pd.DataFrame(result["protective_factors"]), width="stretch", hide_index=True)
 
 elif page == "Explainable AI":
-    page_header("Explainable AI", "How the selected model behaves globally and for this individual record.")
+    page_header("Explainable AI", "How the selected model behaves globally and for this individual record.", page="Explainable AI")
     if not model_available_for_record:
         st.info("There are not enough observed financial fields for model-based SHAP. The available rule-based drivers are shown instead.")
         if current_assessment.get("top_risk_factors"):
@@ -3673,7 +3003,7 @@ elif page == "Explainable AI":
                 y="feature",
                 color="direction",
                 orientation="h",
-                color_discrete_map={"Risk increased": "#EF4444", "Risk reduced": "#2563EB"},
+                color_discrete_map={"Risk increased": CRITICAL, "Risk reduced": G3},
                 title="Individual SHAP contributions",
             )
             fig.update_layout(
@@ -3693,7 +3023,7 @@ elif page == "Explainable AI":
                 y="feature",
                 orientation="h",
                 title="Global feature importance · mean absolute SHAP",
-                color_discrete_sequence=["#3B82F6"],
+                color_discrete_sequence=[G3],
             )
             render_chart(global_fig, height=400, margin={"t": 58, "r": 12, "b": 48, "l": 120})
         except Exception as error:
@@ -3701,7 +3031,7 @@ elif page == "Explainable AI":
     disclaimer()
 
 elif page == "Early-Warning Indicators":
-    page_header("Early-Warning Indicators", "Transparent heuristics that flag potentially deteriorating conditions.")
+    page_header("Early-Warning Indicators", "Transparent heuristics that flag potentially deteriorating conditions.", page="Early-Warning Indicators")
     st.caption("Rules are configurable research heuristics, not learned predictions or universal thresholds.")
     selected_flags = flags.iloc[[row_index]].T.rename(columns={row_index: "Triggered"})
     feature_row = selected_features.iloc[0]
@@ -3732,7 +3062,7 @@ elif page == "Early-Warning Indicators":
                 y=metric,
                 markers=True,
                 title=f"{metric.replace('_', ' ')} over time",
-                color_discrete_sequence=["#2563EB"],
+                color_discrete_sequence=[G3],
             )
             render_chart(fig)
         else:
@@ -3742,7 +3072,7 @@ elif page == "Early-Warning Indicators":
     disclaimer()
 
 elif page == "Model Performance":
-    page_header("Model Performance", "Exploratory evaluation trained only from a target detected in the active upload.")
+    page_header("Model Performance", "Exploratory evaluation trained only from a target detected in the active upload.", page="Model Performance")
     model = data_intelligence.get("model", {})
     if model.get("status") != "evaluated":
         st.info(
@@ -3777,7 +3107,7 @@ elif page == "Model Monitoring":
     render_monitoring_page(bundle)
 
 elif page == "Methodology":
-    page_header("Methodology & Research Mode", "Definitions, evaluation choices, limitations, and responsible interpretation.")
+    page_header("Methodology & Research Mode", "Definitions, evaluation choices, limitations, and responsible interpretation.", page="Methodology")
     st.subheader("Dataset")
     st.write("All production analysis is based on the active uploaded file. The synthetic dataset generator is retained only for isolated tests and development; it is not loaded by the application.")
     st.subheader("Model methodology")
@@ -3826,73 +3156,22 @@ elif page == "Methodology":
     disclaimer()
 
 elif page == "About":
-    page_header("About Surojit Malakar", "Finance, research, operations, and technology in service of practical impact.")
+    page_header(
+        "About Surojit Malakar",
+        "Finance, research, operations, and technology in service of practical impact.",
+        page="About",
+    )
     photo_column, intro_column = st.columns([1, 2], gap="large")
     with photo_column:
-        st.markdown(
-            "<div class='assessment-card'><div class='eyebrow'>CREDIT RISK AI</div>"
-            "<h3>Surojit Malakar</h3><p>SkillseED India</p></div>",
-            unsafe_allow_html=True,
-        )
+        st.markdown(profile_card_html(), unsafe_allow_html=True)
     with intro_column:
         st.subheader("A little about me")
-        st.write(
-            "I am a BBA (Honours with Research) student at Techno India University, "
-            "Kolkata, specializing in Finance, Business Analytics, and Operations. "
-            "My interests lie at the intersection of financial analysis, business "
-            "strategy, operations, research, and social entrepreneurship."
-        )
-        st.write(
-            "My long-term goal is to build a career where I can combine financial "
-            "and analytical thinking with research, strategic decision-making, and "
-            "practical business execution, while continuing to develop initiatives "
-            "that create measurable economic and social impact."
-        )
+        st.write(BIO_SUMMARY)
+        st.write(CAREER_INTENT)
 
-    st.subheader("Entrepreneurship & community impact")
-    st.write(
-        "I am the Founder of SkillseED India, a rural social enterprise focused on "
-        "skill development, agribusiness education, and farmer empowerment. Through "
-        "SkillseED India, I have worked with students and farmers across West Bengal "
-        "and developed initiatives focused on practical education, skill "
-        "development, and agricultural business opportunities."
-    )
-    st.write(
-        "I am also the Founder and Developer of ZynoqIndia, where I have worked on "
-        "an eco-tourism and open-access research publishing platform. This experience "
-        "has allowed me to combine business strategy with technology, including "
-        "product development, UI/UX, React, Vite, Supabase, and digital publishing systems."
-    )
+    st.markdown(about_tiles_html(), unsafe_allow_html=True)
+    st.markdown(about_block_html("Entrepreneurship & community impact", ENTERPRENEURSHIP), unsafe_allow_html=True)
+    st.markdown(about_block_html("Research & analytical frameworks", RESEARCH_FRAMEWORKS), unsafe_allow_html=True)
+    st.markdown(about_block_html("Experience & interests", EXPERIENCE_INTERESTS), unsafe_allow_html=True)
 
-    st.subheader("Research & analytical frameworks")
-    st.write(
-        "My research work focuses on solving practical business and economic problems "
-        "through structured analytical frameworks. I developed the Farm-to-Consumer "
-        "(F2C 4.0) Model, which focuses on farmer entrepreneurship education, "
-        "institutional market access, and cooperative business development."
-    )
-    st.write(
-        "I have also developed Decision Paralysis Economics (DPE), an analytical "
-        "framework examining the organizational and economic costs associated with "
-        "delayed decision-making in environments affected by information overload "
-        "and AI-mediated ambiguity."
-    )
-    st.write(
-        "My academic research experience includes primary data collection, survey "
-        "research, statistical analysis, SPSS-based reporting, and the development "
-        "of analytical frameworks."
-    )
-
-    st.subheader("Experience & interests")
-    st.write(
-        "Alongside my research and entrepreneurial work, I have gained experience "
-        "in HR operations, project management, financial analysis, business "
-        "operations, and community development. My professional experience has "
-        "allowed me to work on recruitment, process improvement, cross-functional "
-        "coordination, research, and program management."
-    )
-    st.write(
-        "I am particularly interested in finance, business analytics, operations "
-        "strategy, agribusiness, financial decision-making, research, and "
-        "technology-enabled business models."
-    )
+st.markdown(site_footer_html(), unsafe_allow_html=True)

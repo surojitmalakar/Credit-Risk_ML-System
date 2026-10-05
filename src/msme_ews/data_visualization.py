@@ -10,8 +10,19 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
+from msme_ews.theme import CHART_SEQUENCE, TEXT, TEXT_MUTED, TEXT_STRONG
 
-_CHART_COLORS = ["#2563EB", "#06B6D4", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6"]
+# The chart builders index this palette by role, not by hue: 0 primary series,
+# 1 secondary series, 2 healthy/positive, 3 caution, 4 alarm, 5 neutral. The
+# brand ramp (CHART_SEQUENCE) is reordered to keep those roles on-colour.
+_CHART_COLORS = [
+    CHART_SEQUENCE[0],
+    CHART_SEQUENCE[1],
+    CHART_SEQUENCE[3],
+    CHART_SEQUENCE[2],
+    CHART_SEQUENCE[4],
+    CHART_SEQUENCE[5],
+]
 _FINANCIAL_FIELDS = {
     "revenue": ("revenue", "sales", "turnover", "income"),
     "profit": ("profit", "pat", "net income", "earnings"),
@@ -151,16 +162,16 @@ def _match_financial_columns(numeric: list[str], role_names: dict[str, str]) -> 
 
 def _layout(figure: go.Figure, height: int = 310) -> go.Figure:
     figure.update_layout(
-        template="plotly_dark",
+        template="plotly_white",
         height=height,
         margin=dict(l=12, r=12, t=48, b=12),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#E2E8F0"),
+        font=dict(color=TEXT),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    figure.update_xaxes(showgrid=False, automargin=True)
-    figure.update_yaxes(gridcolor="rgba(148,163,184,0.14)", automargin=True)
+    figure.update_xaxes(showgrid=False, automargin=True, color=TEXT_STRONG, tickfont=dict(color=TEXT_MUTED))
+    figure.update_yaxes(gridcolor="rgba(16,185,129,0.14)", automargin=True, color=TEXT_STRONG, tickfont=dict(color=TEXT_MUTED))
     return figure
 
 
