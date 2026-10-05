@@ -2002,13 +2002,13 @@ if uploaded is not None:
             "Analyze Dataset",
             disabled=has_current_analysis,
             key="analyze_upload",
-            use_container_width=True,
+            width="stretch",
         )
         reanalyze_clicked = st.button(
             "Re-analyze",
             disabled=not has_current_analysis,
             key="re_analyze_upload",
-            use_container_width=True,
+            width="stretch",
         )
         if reanalyze_clicked:
             analysis_revision += 1
