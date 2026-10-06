@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 
 import pandas as pd
+import pytest
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
@@ -162,6 +163,34 @@ def test_excel_transposed_values_do_not_get_mistaken_for_dates():
         pd.Timestamp("2024-12-31"),
     ]
     assert extracted.frame["Revenue"].tolist() == [1_000_000, 1_200_000]
+
+
+def test_corrupt_ole2_excel_raises_actionable_value_error() -> None:
+    """A protected/corrupt .xls must fail as a friendly ValueError.
+
+    xlrd.XLRDError inherits straight from Exception and used to escape the
+    app's upload handler as a raw traceback that blocked every tab.
+    """
+    fake_workbook = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 1024
+
+    with pytest.raises(ValueError, match="password-protected"):
+        extract_financial_document(fake_workbook, "statement.xls")
+
+
+def test_xlsx_bytes_with_xls_filename_still_read_by_content() -> None:
+    """Engine selection follows magic bytes, not the filename extension."""
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        pd.DataFrame({
+            "company_id": ["Acme"],
+            "period": ["2024"],
+            "Revenue": [1_000_000],
+            "Total Assets": [700_000],
+        }).to_excel(writer, sheet_name="Statement", index=False)
+
+    extracted = extract_financial_document(buffer.getvalue(), "statement.xls")
+
+    assert extracted.frame["Revenue"].iloc[0] == 1_000_000
 
 
 def test_pdf_text_extracts_report_label_value_company_and_year():

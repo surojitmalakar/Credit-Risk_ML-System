@@ -120,6 +120,36 @@ def test_copilot_records_conversation_history_and_presets():
     assert all(entry["question"] and entry["answer"] for entry in history)
 
 
+def test_corrupt_excel_upload_fails_gracefully_and_static_tabs_stay_reachable():
+    """A bad workbook must show one friendly banner, never a raw traceback.
+
+    Regression: xlrd.XLRDError used to escape the upload handler and break
+    every tab until the file was removed.
+    """
+    app = AppTest.from_file(APP).run(timeout=60)
+    corrupt_xls = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 1024
+    app.get("file_uploader")[0].upload(
+        "statement.xls", corrupt_xls, "application/vnd.ms-excel"
+    ).run(timeout=120)
+
+    app.button(key="analyze_upload").click().run(timeout=180)
+
+    assert not app.exception
+    assert any("Dataset analysis failed" in entry.value for entry in app.error)
+    assert any("password-protected" in entry.value for entry in app.error)
+
+    # Static tabs keep working after the failure - nothing is stuck.
+    app.radio[0].set_value("About").run(timeout=120)
+
+    assert not app.exception
+    assert not app.error
+
+    app.radio[0].set_value("Methodology").run(timeout=120)
+
+    assert not app.exception
+    assert not app.error
+
+
 def test_repeated_record_selection_does_not_refetch_or_rescore():
     app = AppTest.from_file(APP).run(timeout=60)
     app.get("file_uploader")[0].upload("portfolio.csv", _financial_csv(), "text/csv").run(timeout=120)

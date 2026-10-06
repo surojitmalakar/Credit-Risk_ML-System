@@ -251,6 +251,54 @@ def _looks_like_statement_layout(frame: pd.DataFrame) -> bool:
     return has_year_columns and (has_metric_rows_label or values_contain_financial_labels)
 
 
+_ZIP_MAGIC = b"PK\x03\x04"
+_OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+def _excel_engine(content: bytes) -> str | None:
+    """Pick the Excel reader from magic bytes so a mislabeled workbook still opens.
+
+    Files saved as ``.xls`` that are really xlsx (and the reverse) are common;
+    routing on content instead of the extension keeps both working.
+    """
+    if content.startswith(_ZIP_MAGIC):
+        return "openpyxl"
+    if content.startswith(_OLE2_MAGIC):
+        return "xlrd"
+    return None
+
+
+def _read_excel_sheets(content: bytes, **read_kwargs: object) -> dict[str, pd.DataFrame]:
+    """Read every worksheet, converting engine failures into actionable errors.
+
+    ``xlrd.XLRDError``, ``zipfile.BadZipFile`` and friends inherit straight from
+    ``Exception``, so without this wrapper they escape the app's error handling
+    as a raw traceback and take down every tab.
+    """
+    engine = _excel_engine(content)
+    options: dict[str, object] = {"sheet_name": None, **read_kwargs}
+    if engine is not None:
+        options["engine"] = engine
+    try:
+        return pd.read_excel(io.BytesIO(content), **options)
+    except ImportError as error:
+        raise ValueError(f"Excel support dependency is unavailable: {error}") from error
+    except Exception as error:
+        detail = f" ({error})" if str(error) else ""
+        if engine == "xlrd":
+            raise ValueError(
+                "This .xls workbook could not be read. It may be password-protected, "
+                "corrupted, or not a real Excel workbook. Open it in Excel or "
+                "LibreOffice and re-save it as .xlsx without a password, then "
+                f"upload it again{detail}"
+            ) from error
+        raise ValueError(
+            "The Excel file could not be read; it may be corrupted, "
+            "password-protected, or not a real Excel workbook. Re-save it as "
+            f".xlsx and try again{detail}"
+        ) from error
+
+
 def _read_tabular_file(content: bytes, suffix: str) -> tuple[pd.DataFrame, list[str]]:
     if suffix == ".csv":
         last_error: Exception | None = None
@@ -261,10 +309,7 @@ def _read_tabular_file(content: bytes, suffix: str) -> tuple[pd.DataFrame, list[
             except (UnicodeDecodeError, pd.errors.ParserError) as error:
                 last_error = error
         raise ValueError(f"CSV could not be parsed: {last_error}")
-    try:
-        sheets = pd.read_excel(io.BytesIO(content), sheet_name=None)
-    except ImportError as error:
-        raise ValueError(f"Excel support dependency is unavailable: {error}") from error
+    sheets = _read_excel_sheets(content)
     tables = [table for table in sheets.values() if not table.empty]
     if not tables:
         return pd.DataFrame(), list(sheets)
@@ -780,10 +825,7 @@ def extract_financial_document(
             raise ValueError(f"CSV could not be parsed: {last_error}")
         text_parts.append(content.decode("utf-8", errors="replace"))
     elif suffix in {".xlsx", ".xls"}:
-        try:
-            sheets = pd.read_excel(io.BytesIO(content), sheet_name=None, header=None, dtype=object)
-        except ImportError as error:
-            raise ValueError(f"Excel support dependency is unavailable: {error}") from error
+        sheets = _read_excel_sheets(content, header=None, dtype=object)
         tables = list(sheets.values())
         warnings.extend(f"Read worksheet: {name}" for name in sheets)
     else:

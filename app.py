@@ -995,41 +995,54 @@ if uploaded is not None:
             st.session_state["_upload_analysis_revision"] = analysis_revision
         upload_pipeline_key = (upload_signature, uploaded.name, analysis_revision)
         if not has_current_analysis and not analyze_clicked and not reanalyze_clicked:
-            st.success("File loaded")
-            st.info("Click Analyze Dataset when you are ready to process this file.")
+            if page == "About":
+                render_about_page()
+            elif page == "Methodology":
+                render_methodology_page()
+            else:
+                st.success("File loaded")
+                st.info("Click Analyze Dataset when you are ready to process this file.")
             st.stop()
         if st.session_state.get("_upload_pipeline_key") != upload_pipeline_key:
             if not uploaded_content:
                 uploaded_content = uploaded.getvalue()
             with st.status("Analyzing dataset...", expanded=True) as progress:
-                document_result = _cached_document_extraction(
-                    uploaded_content,
-                    uploaded.name,
-                    analysis_revision,
-                    upload_signature,
-                )
-                progress.update(label="Detecting variables...")
-                data_intelligence, financial_columns = _cached_dataset_profile(
-                    document_result.frame,
-                    uploaded.name,
-                    analysis_revision,
-                    upload_signature,
-                )
-                progress.update(label="Running risk analysis...")
-                financial_frame = (
-                    _cached_financial_frame(
+                try:
+                    document_result = _cached_document_extraction(
+                        uploaded_content,
+                        uploaded.name,
+                        analysis_revision,
+                        upload_signature,
+                    )
+                    progress.update(label="Detecting variables...")
+                    data_intelligence, financial_columns = _cached_dataset_profile(
                         document_result.frame,
                         uploaded.name,
                         analysis_revision,
                         upload_signature,
                     )
-                    if financial_columns else None
-                )
-                financial_base = (
-                    _cached_financial_features(financial_frame)
-                    if financial_frame is not None else None
-                )
-                progress.update(label="Analysis complete", state="complete", expanded=False)
+                    progress.update(label="Running risk analysis...")
+                    financial_frame = (
+                        _cached_financial_frame(
+                            document_result.frame,
+                            uploaded.name,
+                            analysis_revision,
+                            upload_signature,
+                        )
+                        if financial_columns else None
+                    )
+                    financial_base = (
+                        _cached_financial_features(financial_frame)
+                        if financial_frame is not None else None
+                    )
+                    progress.update(label="Analysis complete", state="complete", expanded=False)
+                except Exception:
+                    # Mark the status as failed so the spinner can never hang,
+                    # then let the outer handler render one friendly banner.
+                    # Streamlit control-flow stops inherit BaseException and
+                    # pass through this handler untouched.
+                    progress.update(label="Analysis failed", state="error", expanded=True)
+                    raise
             st.session_state["_upload_pipeline_key"] = upload_pipeline_key
             st.session_state["_upload_pipeline"] = {
                 "document": document_result,
@@ -1078,8 +1091,15 @@ if uploaded is not None:
         for warning in document_result.warnings:
             st.caption(warning)
         st.caption("Document contents are processed locally; verify extracted figures against the source statement.")
-    except (ValueError, TypeError, OSError, ImportError, KeyError) as error:
+    except Exception as error:
+        # One friendly banner instead of a raw traceback that takes down every
+        # tab. Streamlit's st.stop()/st.rerun control flow inherits
+        # BaseException, so it always passes through this handler untouched.
         st.error(f"Dataset analysis failed: {error}")
+        if page == "About":
+            render_about_page()
+        elif page == "Methodology":
+            render_methodology_page()
         st.stop()
 else:
     if page == "About":
