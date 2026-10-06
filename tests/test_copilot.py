@@ -93,7 +93,8 @@ def test_sensitivity_answer_points_at_breached_thresholds():
     context["debt_to_assets"] = 0.7
     answer = generate_credit_copilot_response("what if revenue falls by 20%", context)
     assert "liquidity" in answer and "leverage" in answer
-    assert "Scenario Simulator" in answer
+    assert "re-run the analysis" in answer
+    assert "Scenario Simulator" not in answer
 
 
 def test_comparison_answer_uses_observed_history():

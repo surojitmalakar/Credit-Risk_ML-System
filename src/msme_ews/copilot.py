@@ -250,9 +250,9 @@ def _sensitivity_answer(context: dict[str, Any]) -> str:
         )
         return (
             evidence
-            + "Use Scenario Simulator to change revenue, margin, or debt. It recalculates the "
-            "uploaded record's financial values and transparent rule-based index; it does not "
-            "produce an unsupported ML prediction."
+            + "Change revenue, margin, or debt in the uploaded statement and re-run the analysis; "
+            "the app recalculates the record's financial values and transparent rule-based index; "
+            "it does not produce an unsupported ML prediction."
         )
     leverage = context.get("debt_to_assets", 0.0)
     liquidity = context.get("current_ratio")
@@ -271,7 +271,7 @@ def _sensitivity_answer(context: dict[str, Any]) -> str:
         drivers = ["revenue level", "operating cash generation"]
     return (
         f"This assessment is most sensitive to {', '.join(drivers)}. "
-        "Use the Scenario Simulator to apply an explicit revenue, margin, or debt change and read "
+        "Adjust that driver in the uploaded statement and re-run the analysis to read "
         "the recalculated risk index rather than a verbal estimate."
     )
 

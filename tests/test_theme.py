@@ -27,21 +27,11 @@ from msme_ews.theme import (
 
 EXPECTED_TABS = {
     "Executive Overview",
-    "Portfolio Screening",
-    "Compare Records",
-    "Data Explorer",
-    "Data Intelligence",
     "MSME Financial Health",
     "Risk Prediction",
-    "AI Copilot",
-    "Explainable AI",
     "Early-Warning Indicators",
-    "Scenario Simulator",
-    "Stress Testing",
-    "Credit Assessment",
-    "Model Performance",
-    "Model Calibration",
-    "Model Monitoring",
+    "Data Intelligence",
+    "Reports",
     "Methodology",
     "About",
 }
