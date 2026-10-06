@@ -6,9 +6,14 @@ Single-entity datasets return ``multi_entity=False`` with an explanation.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pandas as pd
+
+
+def _key(value: object) -> str:
+    return re.sub(r"[\s_\-]+", " ", str(value).strip().lower())
 
 
 def _entity_key(frame: pd.DataFrame) -> pd.Series:
@@ -57,4 +62,61 @@ def portfolio_intelligence(frame: pd.DataFrame, scores: pd.DataFrame) -> dict[st
     out["concentrations"] = conc[:6]
     # Anomaly concentration: flagged share per band when available.
     out["bands"] = {str(k): int(v) for k, v in cats.value_counts(dropna=False).items()}
+    # Explicit low / moderate / high / critical tier counts.
+    tiers = {"Low Risk": 0, "Moderate Risk": 0, "High Risk": 0, "Critical Risk": 0}
+    for category, count in out["bands"].items():
+        if category in tiers:
+            tiers[category] = int(count)
+    out["risk_tiers"] = tiers
+    # Geographic concentration from recognised location columns.
+    geo_columns = [
+        column for column in frame.columns
+        if _key(column) in {"country", "state", "city", "region",
+                            "geography", "nation", "province", "district"}
+    ]
+    geo = []
+    for column in geo_columns:
+        top = frame[column].astype("string").value_counts(normalize=True).head(5)
+        geo.append({"column": str(column),
+                    "top": "; ".join(f"{i} {v:.0%}" for i, v in top.items())})
+    out["geo_concentration"] = geo
+    # Anomaly concentration when an anomaly score/flag column is present.
+    anomaly_column = next(
+        (column for column in frame.columns
+         if "anomal" in _key(column) or "outlier" in _key(column)),
+        None,
+    )
+    if anomaly_column is not None:
+        flag = pd.to_numeric(frame[anomaly_column], errors="coerce")
+        if flag.notna().any():
+            anomalous = float((flag.fillna(0) != 0).mean())
+            out["anomaly_concentration"] = {"column": str(anomaly_column), "share": anomalous}
+        else:
+            out["anomaly_concentration"] = None
+    else:
+        out["anomaly_concentration"] = None
+    # Portfolio trend: mean risk index by period when a period column exists.
+    period_column = next(
+        (column for column in frame.columns
+         if _key(column) in {"period", "year", "date", "quarter", "month"}),
+        None,
+    )
+    if period_column is not None and len(idx) == len(frame):
+        trend_frame = pd.DataFrame({
+            "period": frame[period_column].astype("string").to_numpy(),
+            "risk": idx.to_numpy(),
+        })
+        trend = (
+            trend_frame.groupby("period", dropna=False)["risk"]
+            .agg(["mean", "count"])
+            .reset_index()
+        )
+        out["trend"] = [
+            {"period": str(row["period"]),
+             "mean_risk": (float(row["mean"]) if pd.notna(row["mean"]) else None),
+             "records": int(row["count"])}
+            for _, row in trend.iterrows()
+        ]
+    else:
+        out["trend"] = None
     return out

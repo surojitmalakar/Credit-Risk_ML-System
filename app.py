@@ -42,7 +42,7 @@ from msme_ews.calibration import (
     shifted_band_counts,
     threshold_table,
 )
-from msme_ews.credit_assessment import apply_scenario_adjustments, generate_risk_interpretation
+from msme_ews.credit_assessment import generate_risk_interpretation
 from msme_ews.copilot import (
     build_credit_context,
     generate_credit_copilot_answer,
@@ -97,7 +97,7 @@ from msme_ews.notes import (
 from msme_ews.portfolio import analyze_credit_portfolio
 from msme_ews.portfolio_intel import portfolio_intelligence
 from msme_ews.warning_detail import detailed_warnings, triggered_warnings
-from msme_ews.whatif import WHATIF_FIELDS, apply_whatif, available_whatif_fields, score_whatif
+from msme_ews.whatif import available_whatif_fields, score_whatif
 from msme_ews.reports import (
     create_credit_assessment_pdf,
     create_credit_risk_pdf,
@@ -899,6 +899,35 @@ def render_kpi_card(label: str, value: str, status: str, state: str = "neutral")
         """,
         unsafe_allow_html=True,
     )
+
+
+def render_report_card(
+    title: str,
+    subtitle: str,
+    cache: dict,
+    data_key: str,
+    build,
+    file_name: str,
+    mime: str = "application/pdf",
+) -> None:
+    """Render one on-demand report card with a generate and download action."""
+    with st.container(border=True):
+        st.markdown(f"**{title}**")
+        st.caption(subtitle)
+        if st.button(f"Generate {title}", key=f"generate_{data_key}", width="stretch"):
+            try:
+                cache[data_key] = build()
+            except Exception as error:
+                st.warning(f"{title} generation failed: {error}")
+        if data_key in cache:
+            st.download_button(
+                f"Download {title}",
+                data=cache[data_key],
+                file_name=file_name,
+                mime=mime,
+                key=f"download_{data_key}",
+                width="stretch",
+            )
 
 
 def render_shap_drivers(result: dict) -> None:
@@ -2088,6 +2117,9 @@ st.sidebar.markdown("<div class='eyebrow'>CREDIT INTELLIGENCE</div>", unsafe_all
 st.sidebar.title("CREDIT RISK AI")
 selected_navigation = st.sidebar.radio("Workspace", list(NAVIGATION), label_visibility="collapsed")
 page = NAVIGATION[selected_navigation]
+# One authoritative page state, mirrored from the navigation radio so every
+# page switch is explicit and the active upload is never reset.
+st.session_state["current_page"] = page
 
 st.markdown(
     """
@@ -2209,181 +2241,21 @@ if uploaded is not None:
             f"File successfully loaded. AI Data Detective completed. "
             f"{document_result.status} Source: {document_result.source_type}."
         )
-        st.markdown("<div class='panel-header'><h3>AI Data Detective</h3></div>", unsafe_allow_html=True)
-        st.markdown(
-            "<div class='panel-header'><h3>Automatic Analysis Summary</h3></div>",
-            unsafe_allow_html=True,
+        # Compact analysis context. The full automatic analysis (dataset
+        # profile, detected variables, patterns, and recommendations) lives on
+        # the Data Intelligence page; every other page shows only this summary
+        # strip so no page duplicates the dashboard layout.
+        context_cols = st.columns(4)
+        context_cols[0].metric("Analysis Mode", data_intelligence["analysis_mode"])
+        context_cols[1].metric("Dataset", data_intelligence["dataset_type"])
+        context_cols[2].metric("Records", f"{len(document_result.frame):,}")
+        context_cols[3].metric("Anomalies", f"{data_intelligence['anomaly_count']:,}")
+        st.caption(
+            f"AI Data Detective: {document_result.status} Source: {document_result.source_type}. "
+            f"{data_intelligence['executive_summary']} "
+            "Open Data Intelligence for the full dataset profile, detected variables, "
+            "correlations, and recommendations."
         )
-        with st.container(border=True):
-            st.markdown("**Key Metrics**")
-            summary_cols = st.columns(4)
-            summary_cols[0].metric("Analysis Mode", data_intelligence["analysis_mode"])
-            summary_cols[1].metric("Dataset", data_intelligence["dataset_type"])
-            summary_cols[2].metric("Records", f"{len(document_result.frame):,}")
-            summary_cols[3].metric("Anomalies", f"{data_intelligence['anomaly_count']:,}")
-            result_cols = st.columns(3)
-            result_cols[0].metric(
-                "ML Target",
-                data_intelligence["targets"][0] if data_intelligence["targets"] else "Not detected",
-            )
-            result_cols[1].metric(
-                "Supervised Evaluation",
-                "Held-out model evaluated"
-                if data_intelligence["model_evaluation_available"]
-                else data_intelligence["risk_prediction_summary"],
-            )
-            result_cols[2].metric("Alternative Analysis", data_intelligence["alternative_analysis"])
-            if data_intelligence["targets"] and not data_intelligence["model_evaluation_available"]:
-                st.caption(
-                    "A potential target was detected, but the available labeled data did not support "
-                    "a held-out model evaluation. Statistical pattern analysis is shown instead."
-                )
-            elif not data_intelligence["targets"]:
-                st.caption(
-                    "No explicit default target was found. Anomaly and risk-pattern analysis was performed instead."
-                )
-            else:
-                st.caption(
-                    "The model was evaluated against the uploaded target on a hold-out split. "
-                    "It does not generate a calibrated probability of default."
-                )
-        st.markdown("<div class='panel-header'><h3>Executive Summary</h3></div>", unsafe_allow_html=True)
-        st.caption(data_intelligence["executive_summary"])
-        st.markdown("<div class='panel-header'><h3>Data Intelligence Dashboard</h3></div>", unsafe_allow_html=True)
-        st.markdown("<div class='panel-header'><h3>Dataset Overview</h3></div>", unsafe_allow_html=True)
-        overview_cols = st.columns(3)
-        overview_cols[0].metric("Rows", f"{len(document_result.frame):,}")
-        overview_cols[1].metric("Columns", f"{len(document_result.frame.columns):,}")
-        overview_cols[2].metric("Missing values", f"{int(document_result.frame.isna().sum().sum()):,}")
-        overview_cols = st.columns(3)
-        overview_cols[0].metric("Duplicate records", f"{data_intelligence['duplicate_count']:,}")
-        overview_cols[1].metric("Numeric variables", len(data_intelligence["numeric_columns"]))
-        overview_cols[2].metric("Categorical variables", len(data_intelligence["categorical_columns"]))
-        with st.expander("Financial analysis from detected fields"):
-            financial_metrics = _financial_metrics_for_display(data_intelligence["financial_metrics"])
-            st.dataframe(
-                financial_metrics,
-                width="stretch",
-                hide_index=True,
-            )
-        st.markdown("<div class='panel-header'><h3>Visual Analytics</h3></div>", unsafe_allow_html=True)
-        if data_visualizations:
-            for section, chart_items in data_visualizations.items():
-                st.markdown(f"**{section}**")
-                for chart_index in range(0, len(chart_items), 2):
-                    chart_cols = st.columns(2)
-                    for chart_col, chart_item in zip(
-                        chart_cols,
-                        chart_items[chart_index:chart_index + 2],
-                        strict=False,
-                    ):
-                        with chart_col:
-                            style_chart(chart_item["figure"])
-                            st.plotly_chart(
-                                chart_item["figure"],
-                                width="stretch",
-                                config={"displayModeBar": False},
-                                key=f"data_intelligence_{section}_{chart_index}_{chart_item['title']}",
-                            )
-        else:
-            st.info(
-                "No charts could be generated from the available non-constant values. "
-                "The data profile and quality summary are still available below."
-            )
-        with st.expander("Data Profile and Detected Variables", expanded=not financial_columns):
-            st.dataframe(data_intelligence["profile"], width="stretch", hide_index=True)
-            if data_intelligence["identifiers"]:
-                st.caption("Potential identifiers: " + ", ".join(data_intelligence["identifiers"]))
-            if data_intelligence["targets"]:
-                st.caption("Potential target variables: " + ", ".join(data_intelligence["targets"]))
-            st.caption(
-                f"Numeric: {', '.join(data_intelligence['numeric_columns']) or 'none'} | "
-                f"Categorical: {', '.join(data_intelligence['categorical_columns']) or 'none'} | "
-                f"Date/time: {', '.join(data_intelligence['date_columns']) or 'none'}"
-            )
-        if data_intelligence["findings"]:
-            with st.expander("Risk / Anomaly Analysis, Early Warnings, and Recommendations", expanded=not financial_columns):
-                for finding in data_intelligence["findings"]:
-                    st.write(f"- {finding}")
-                if not data_intelligence["correlations"].empty:
-                    st.dataframe(data_intelligence["correlations"], width="stretch", hide_index=True)
-                if not data_intelligence["statistics"].empty:
-                    st.dataframe(data_intelligence["statistics"], width="stretch", hide_index=True)
-                if not data_intelligence["categorical_summary"].empty:
-                    st.markdown("**Categorical distributions**")
-                    st.dataframe(data_intelligence["categorical_summary"], width="stretch", hide_index=True)
-                if not data_intelligence["target_distribution"].empty:
-                    st.markdown("**Observed target / outcome distribution**")
-                    st.dataframe(data_intelligence["target_distribution"], width="stretch", hide_index=True)
-                if not data_intelligence["high_risk_groups"].empty:
-                    st.markdown("**High-risk groups from observed target labels**")
-                    st.dataframe(data_intelligence["high_risk_groups"], width="stretch", hide_index=True)
-                if not data_intelligence["trends"].empty:
-                    st.markdown("**Observed trends**")
-                    st.dataframe(data_intelligence["trends"], width="stretch", hide_index=True)
-                if not data_intelligence["segments"].empty:
-                    st.markdown("**Exploratory numeric segments**")
-                    st.dataframe(data_intelligence["segments"], width="stretch", hide_index=True)
-                st.markdown(
-                    f"**Risk / Anomaly Analysis: {data_intelligence['analysis_result_title']}**"
-                )
-                st.caption(
-                    "Supervised model metrics evaluate the uploaded target on hold-out data. Anomaly means "
-                    "statistical unusualness; neither is a row-level default probability or misconduct determination."
-                )
-                st.dataframe(data_intelligence["risk_results"].head(100), width="stretch", hide_index=True)
-                model = data_intelligence["model"]
-                if data_intelligence["model_evaluation_available"]:
-                    st.markdown("**Supervised Model Evaluation — hold-out results**")
-                    st.write(f"Model: {model['model']}")
-                    st.write(f"Target: {model['target']}")
-                    model_metrics = st.columns(3)
-                    if "accuracy" in model:
-                        model_metrics[0].metric("Accuracy", f"{model['accuracy']:.1%}")
-                        model_metrics[1].metric("Balanced Accuracy", f"{model['balanced_accuracy']:.1%}")
-                    else:
-                        model_metrics[0].metric("Mean Absolute Error", f"{model['mae']:.3g}")
-                        model_metrics[1].metric("R²", f"{model['r2']:.3f}")
-                    model_metrics[2].metric("Evaluation records", f"{model['test_rows']:,}")
-                    if model.get("top_features"):
-                        st.markdown("**Top model features**")
-                        st.dataframe(
-                            pd.DataFrame(model["top_features"]).rename(columns={
-                                "feature": "Feature",
-                                "importance": "Relative importance",
-                            }),
-                            width="stretch",
-                            hide_index=True,
-                        )
-                    st.caption(model.get("limitation", "Exploratory hold-out evaluation; validate before operational use."))
-                else:
-                    st.markdown(f"**{data_intelligence['analysis_result_title']}**")
-                    if not data_intelligence["targets"]:
-                        st.info(
-                            "No explicit default target was found. Anomaly and risk-pattern analysis was performed instead."
-                        )
-                    else:
-                        st.info(
-                            "A candidate target was found, but a reliable hold-out model could not be evaluated. "
-                            "Anomaly and statistical risk-pattern analysis is shown instead."
-                        )
-                if not data_intelligence["concentration"].empty:
-                    st.dataframe(data_intelligence["concentration"], width="stretch", hide_index=True)
-                st.markdown("**Recommendations**")
-                for recommendation in data_intelligence["recommendations"]:
-                    st.write(f"- {recommendation}")
-                st.markdown("**Early Warnings**")
-                if data_intelligence.get("warning_details"):
-                    st.dataframe(
-                        pd.DataFrame(data_intelligence["warning_details"]),
-                        width="stretch",
-                        hide_index=True,
-                    )
-                elif data_intelligence["early_warnings"]:
-                    for warning in data_intelligence["early_warnings"]:
-                        st.write(f"- {warning}")
-                else:
-                    st.info("No data-derived early warning was triggered.")
         frame = financial_frame
         for warning in document_result.warnings:
             st.caption(warning)
@@ -2687,6 +2559,73 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
                 risk_class,
             )
 
+        # Domain KPI strip: liquidity, profitability, leverage, cash flow.
+        net_margin = financial_analysis["ratios"].get("Net Profit Margin")
+        debt_assets = financial_analysis["ratios"].get("Debt / Assets")
+        ocf_revenue = financial_analysis["ratios"].get("Operating Cash Flow / Revenue")
+        domain_cols = st.columns(4)
+        with domain_cols[0]:
+            render_kpi_card(
+                "Liquidity",
+                f"{current_ratio:.2f}x" if pd.notna(current_ratio) else "N/A",
+                "Healthy" if pd.notna(current_ratio) and current_ratio >= 1 else "Watch" if pd.notna(current_ratio) else "Unavailable",
+                "healthy" if pd.notna(current_ratio) and current_ratio >= 1 else "watch" if pd.notna(current_ratio) else "neutral",
+            )
+        with domain_cols[1]:
+            render_kpi_card(
+                "Profitability",
+                f"{net_margin:.1%}" if net_margin is not None else "N/A",
+                "Positive" if net_margin is not None and net_margin > 0 else "Negative" if net_margin is not None else "Unavailable",
+                "healthy" if net_margin is not None and net_margin > 0 else "high" if net_margin is not None else "neutral",
+            )
+        with domain_cols[2]:
+            render_kpi_card(
+                "Leverage",
+                f"{debt_assets:.2f}x" if debt_assets is not None else "N/A",
+                "Elevated" if debt_assets is not None and debt_assets >= 0.65 else "Moderate" if debt_assets is not None else "Unavailable",
+                "high" if debt_assets is not None and debt_assets >= 0.65 else "healthy" if debt_assets is not None else "neutral",
+            )
+        with domain_cols[3]:
+            render_kpi_card(
+                "Cash Flow",
+                f"{ocf_revenue:.1%}" if ocf_revenue is not None else "N/A",
+                "Positive" if ocf_revenue is not None and ocf_revenue > 0 else "Negative" if ocf_revenue is not None else "Unavailable",
+                "healthy" if ocf_revenue is not None and ocf_revenue > 0 else "high" if ocf_revenue is not None else "neutral",
+            )
+
+        # Concise company-level executive summary generated from the actual analysis.
+        period_value = selected.iloc[0].get("period")
+        period_label = str(period_value) if pd.notna(period_value) else "period not identified"
+        summary_parts = [
+            (
+                f"{company_name} ({period_label}) is classified as "
+                f"{result['risk_category']} with a rule-based risk index of "
+                f"{result['risk_index']:.1f}/100"
+                if result.get("risk_index") is not None
+                else f"{company_name} ({period_label}) risk could not be calculated from the available fields"
+            )
+        ]
+        if health_score is not None:
+            summary_parts.append(f"financial health score {health_score:.0f}/100")
+        top_drivers = [
+            str(factor.get("feature")).replace("_", " ")
+            for factor in (result.get("top_risk_factors") or [])[:3]
+        ]
+        if top_drivers:
+            summary_parts.append("primary risk drivers: " + ", ".join(top_drivers))
+        if active_warning_signals:
+            summary_parts.append("active early warnings: " + ", ".join(active_warning_signals[:3]))
+        if recommendations:
+            summary_parts.append(f"priority action: {recommendations[0]}")
+        st.markdown("<div class='panel-header'><h3>Company Executive Summary</h3></div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div class='risk-summary-card {risk_class}'>"
+            f"<div class='risk-state'>{escape(result['risk_category'])}</div>"
+            f"<p>{escape('. '.join(summary_parts))}.</p>"
+            f"<strong>{escape(result['method'])}</strong></div>",
+            unsafe_allow_html=True,
+        )
+
         if not model_available_for_record and page in {"Executive Overview", "Credit Assessment"}:
             st.info(
                 "No dataset-specific ML model is served for this upload. This is a transparent rule-based "
@@ -2895,111 +2834,117 @@ if page in {"Executive Overview", "AI Copilot", "Scenario Simulator", "Credit As
             st.info("No risk driver could be calculated from the available fields.")
 
     if page == "Scenario Simulator":
-        page_header("Scenario Simulator", "Explore how adjusted financial assumptions change the model's estimate.", page="Scenario Simulator")
-        st.caption("Adjust one-period assumptions to recalculate observed financial values and the rule-based risk index. Margin change is in percentage points; revenue and debt changes are relative percentages.")
-        with st.form("credit_scenario"):
-            scenario_cols = st.columns(3)
-            with scenario_cols[0]:
-                revenue_change = st.slider("Revenue change", min_value=-20, max_value=20, value=0, step=1, format="%d%%")
-            with scenario_cols[1]:
-                margin_change = st.slider("Operating margin change", min_value=-10, max_value=10, value=0, step=1, format="%d pp")
-            with scenario_cols[2]:
-                debt_change = st.slider("Debt change", min_value=-20, max_value=20, value=0, step=1, format="%d%%")
-            run_scenario = st.form_submit_button("Run scenario")
-
-        if run_scenario:
-            try:
-                scenario_data = apply_scenario_adjustments(
-                    selected,
-                    revenue_change=revenue_change / 100,
-                    operating_margin_change=margin_change / 100,
-                    debt_change=debt_change / 100,
-                )
-                scenario_feature_frame = engineer_features(scenario_data)
-                scenario_features = scenario_feature_frame.iloc[0]
-                scenario_analysis = analyze_financials(scenario_data, 0, scenario_feature_frame)
-                scenario_result = rule_based_assessment(
-                    scenario_data,
-                    0,
-                    scenario_analysis,
-                )
-                if scenario_result["risk_index"] is not None:
-                    scenario_result["health_score"] = 100 - scenario_result["risk_index"]
-                scenario_warnings = early_warning_indicators(scenario_data).iloc[0]
-                scenario_signals = scenario_warnings[scenario_warnings].index.tolist()
-                risk_index_change = (
-                    scenario_result["risk_index"] - result["risk_index"]
-                    if scenario_result.get("risk_index") is not None
-                    and result.get("risk_index") is not None
-                    else None
-                )
-                scenario_metric, scenario_status = st.columns(2)
-                scenario_metric.metric(
-                    "Model prediction" if model_available_for_record else "Scenario risk index",
-                    f"{scenario_result['distress_probability']:.1%}"
-                    if model_available_for_record and scenario_result.get("distress_probability") is not None
-                    else f"{scenario_result['risk_index']:.1f}/100"
-                    if scenario_result.get("risk_index") is not None
-                    else "Insufficient data",
-                    delta=f"{risk_index_change:+.1f} index points" if risk_index_change is not None else None,
-                    delta_color="inverse",
-                )
-                scenario_status.metric(
-                    "Baseline model prediction" if model_available_for_record else "Baseline risk index",
-                    f"{result['distress_probability']:.1%}"
-                    if model_available_for_record and result.get("distress_probability") is not None
-                    else f"{result['risk_index']:.1f}/100"
-                    if result.get("risk_index") is not None
-                    else "Insufficient data",
-                )
-                comparable_fields = [
-                    column for column in ("Revenue", "EBITDA", "Debt")
-                    if column in selected.columns and column in scenario_data.columns
-                ]
-                comparison_rows = [
-                    {
-                        "Metric": column,
-                        "Baseline": selected.iloc[0][column],
-                        "Scenario": scenario_data.iloc[0][column],
-                        "Change": scenario_data.iloc[0][column] - selected.iloc[0][column],
-                    }
-                    for column in comparable_fields
-                ]
-                for ratio_name in ("Current Ratio", "Debt / Assets", "Net Profit Margin"):
-                    baseline_value = financial_analysis["ratios"].get(ratio_name)
-                    scenario_value = scenario_analysis["ratios"].get(ratio_name)
-                    if baseline_value is not None or scenario_value is not None:
-                        comparison_rows.append({
-                            "Metric": ratio_name,
-                            "Baseline": baseline_value,
-                            "Scenario": scenario_value,
-                            "Change": (
-                                scenario_value - baseline_value
-                                if baseline_value is not None and scenario_value is not None
-                                else None
+        page_header("What-If Lab", "Test hypothetical financial changes against the actual selected company-period.", page="Scenario Simulator")
+        st.caption("HYPOTHETICAL SCENARIO — NOT ACTUAL RESULTS. Adjustments are applied to a copy of the selected record; the uploaded dataset is never modified.")
+        available_fields = available_whatif_fields(selected.iloc[0])
+        if not available_fields:
+            st.info(
+                "No adjustable financial fields were detected in the selected record. "
+                "Provide Revenue, EBITDA, Debt, Cash, Assets, Liabilities, Receivables, "
+                "Inventory, Operating Cash Flow, or Interest Expense to run a scenario."
+            )
+        else:
+            changes: dict[str, float] = {}
+            with st.form("whatif_scenario"):
+                slider_cols = st.columns(3)
+                for position, (field_key, column, label) in enumerate(available_fields):
+                    with slider_cols[position % 3]:
+                        if field_key == "profit_margin":
+                            raw_change = st.slider(label, min_value=-20, max_value=20, value=0, step=1, format="%d pp", key=f"whatif_{field_key}")
+                        else:
+                            raw_change = st.slider(label, min_value=-50, max_value=50, value=0, step=5, format="%d%%", key=f"whatif_{field_key}")
+                        changes[field_key] = raw_change / 100.0
+                run_scenario = st.form_submit_button("Run hypothetical scenario")
+            if run_scenario:
+                try:
+                    scored = score_whatif(frame, row_index, changes)
+                    scenario_result = scored["result"]
+                    scenario_analysis = scored["analysis"]
+                    risk_index_change = (
+                        scenario_result["risk_index"] - result["risk_index"]
+                        if scenario_result.get("risk_index") is not None
+                        and result.get("risk_index") is not None
+                        else None
+                    )
+                    health_change = (
+                        scenario_result.get("health_score") - result.get("health_score")
+                        if scenario_result.get("health_score") is not None
+                        and result.get("health_score") is not None
+                        else None
+                    )
+                    scenario_metric, scenario_status, scenario_health = st.columns(3)
+                    scenario_metric.metric(
+                        "Scenario risk index",
+                        f"{scenario_result['risk_index']:.1f}/100" if scenario_result.get("risk_index") is not None else "Insufficient data",
+                        delta=f"{risk_index_change:+.1f} points" if risk_index_change is not None else None,
+                        delta_color="inverse",
+                    )
+                    scenario_status.metric(
+                        "Baseline risk index",
+                        f"{result['risk_index']:.1f}/100" if result.get("risk_index") is not None else "Insufficient data",
+                    )
+                    scenario_health.metric(
+                        "Health score change",
+                        f"{health_change:+.1f} points" if health_change is not None else "Not available",
+                    )
+                    comparison_rows = []
+                    for field_key, column, label in available_fields:
+                        if field_key == "profit_margin":
+                            continue
+                        if column in selected.columns and column in scored["frame"].columns:
+                            baseline_value = selected.iloc[0][column]
+                            scenario_value = scored["frame"].iloc[0][column]
+                            try:
+                                change = float(scenario_value) - float(baseline_value)
+                            except (TypeError, ValueError):
+                                change = None
+                            comparison_rows.append({
+                                "Metric": label.replace(" (%)", ""),
+                                "Current": baseline_value,
+                                "Scenario": scenario_value,
+                                "Change": change,
+                            })
+                    for ratio_name in ("Current Ratio", "Debt / Assets", "Net Profit Margin", "Interest Coverage"):
+                        baseline_value = financial_analysis["ratios"].get(ratio_name)
+                        scenario_value = scenario_analysis["ratios"].get(ratio_name)
+                        if baseline_value is not None or scenario_value is not None:
+                            comparison_rows.append({
+                                "Metric": ratio_name,
+                                "Current": baseline_value,
+                                "Scenario": scenario_value,
+                                "Change": (
+                                    scenario_value - baseline_value
+                                    if baseline_value is not None and scenario_value is not None
+                                    else None
+                                ),
+                            })
+                    if comparison_rows:
+                        st.markdown("<div class='panel-header'><h3>Current vs Scenario</h3></div>", unsafe_allow_html=True)
+                        st.dataframe(pd.DataFrame(comparison_rows), width="stretch", hide_index=True)
+                    st.markdown("<div class='panel-header'><h3>Scenario Risk Drivers</h3></div>", unsafe_allow_html=True)
+                    if scenario_result.get("top_risk_factors"):
+                        st.dataframe(
+                            pd.DataFrame(scenario_result["top_risk_factors"]).rename(
+                                columns={"feature": "Scenario risk driver", "contribution": "Rule weight"}
                             ),
-                        })
-                if comparison_rows:
-                    st.markdown("**Baseline · Scenario · Change**")
-                    st.dataframe(pd.DataFrame(comparison_rows), width="stretch", hide_index=True)
-                if model_available_for_record:
-                    render_ai_risk_interpretation(
-                        scenario_result,
-                        scenario_features,
-                        scenario_signals,
-                    )
-                else:
-                    st.info(
-                        "Scenario results use the same transparent rules as the current sparse-data assessment; "
-                        "they are not calibrated default probabilities."
-                    )
-                st.caption(
-                    f"Applied assumptions: revenue {revenue_change:+d}%, "
-                    f"operating margin {margin_change:+d} percentage points, "
-                    f"debt {debt_change:+d}%."
-                )
-            except (TypeError, ValueError) as error:
-                st.error(f"Scenario could not be calculated: {error}")
+                            width="stretch",
+                            hide_index=True,
+                        )
+                    else:
+                        st.info("No scenario risk driver could be calculated from the adjusted values.")
+                    if scored["signals"]:
+                        st.markdown("**Scenario early warnings triggered:** " + ", ".join(scored["signals"]))
+                    else:
+                        st.caption("No early-warning indicator is triggered under these assumptions.")
+                    applied = [
+                        (f"{label} {changes[field_key] * 100:+.0f} pp" if field_key == "profit_margin"
+                         else f"{label} {changes[field_key]:+.0%}")
+                        for field_key, column, label in available_fields
+                        if changes.get(field_key)
+                    ]
+                    st.caption("Applied assumptions: " + (", ".join(applied) if applied else "no changes"))
+                except (TypeError, ValueError) as error:
+                    st.error(f"Scenario could not be calculated: {error}")
         disclaimer()
 
     if is_overview:
@@ -3111,10 +3056,14 @@ elif page == "MSME Financial Health":
     k12.metric("Inventory", f"{inv:,.0f}" if inv is not None else "Not available")
     st.markdown("<div class='panel-header'><h3>Profitability</h3></div>", unsafe_allow_html=True)
     st.dataframe(pd.DataFrame([
-        {"Metric": "Gross/operating/net profit (observed)", "Revenue": rev, "EBITDA": ebitda, "Net profit": netp},
-        {"Metric": "Margins", "EBITDA margin": r.get("EBITDA Margin"), "Net margin": r.get("Net Profit Margin"),
-         "ROA": r.get("Return on Assets"), "ROE": r.get("Return on Equity")},
+        {"Metric": "Observed profit", "Revenue": rev, "EBITDA": ebitda,
+         "Net profit": netp, "Gross profit": r.get("Gross Profit")},
+        {"Metric": "Margins", "EBITDA margin": r.get("EBITDA Margin"),
+         "Net margin": r.get("Net Profit Margin"), "Gross margin": r.get("Gross Margin")},
+        {"Metric": "Returns", "ROA": r.get("Return on Assets"),
+         "ROE": r.get("Return on Equity"), "ROCE": r.get("ROCE")},
     ]), width="stretch", hide_index=True)
+    st.caption("ROCE = EBITDA / capital employed (total assets minus current liabilities). Gross profit/margin require an observed cost-of-goods-sold field; otherwise they are not available.")
     st.markdown("<div class='panel-header'><h3>Liquidity, leverage & cash flow</h3></div>", unsafe_allow_html=True)
     st.dataframe(pd.DataFrame([
         {"Area": "Liquidity", "Current ratio": r.get("Current Ratio"), "Quick ratio": r.get("Quick Ratio"),
@@ -3132,8 +3081,11 @@ elif page == "MSME Financial Health":
             metric = st.selectbox("Historical measure", ["Revenue", "Current_Ratio", "Debt_to_Assets", "EBITDA_Margin", "Interest_Coverage"], key="finhealth_trend")
             fig = px.line(series, x="period", y=metric, markers=True, title=f"{metric.replace('_', ' ')} over time", color_discrete_sequence=[G3])
             render_chart(fig, height=280)
+            st.markdown("<div class='panel-header'><h3>Period Comparison</h3></div>", unsafe_allow_html=True)
+            st.caption("Every observed company-period, sorted chronologically. Ratios are engineered from the uploaded values.")
+            st.dataframe(series, width="stretch", hide_index=True)
         else:
-            st.info("At least two dated company-period records are needed for a trend chart.")
+            st.info("At least two dated company-period records are needed for a trend chart and period comparison.")
     st.dataframe(pd.DataFrame([{"Ratio": k, "Value": v if v is not None else "Not available"} for k, v in financial_analysis["ratios"].items()]).astype({"Value": "string"}), width="stretch", hide_index=True)
     disclaimer()
 
@@ -3186,6 +3138,45 @@ elif page == "Risk Prediction":
     with protective:
         st.subheader("Risk-reducing factors")
         st.dataframe(pd.DataFrame(result["protective_factors"]), width="stretch", hide_index=True)
+
+    # Professional credit-risk summary: why this risk level, what reduces it,
+    # and what could increase it — all derived from the actual factors above.
+    risk_class = _state_color(result["risk_category"])
+    risk_driver_names = [
+        str(factor.get("feature")).replace("_", " ")
+        for factor in (result.get("top_risk_factors") or [])
+    ]
+    protective_names = [
+        str(factor.get("feature")).replace("_", " ")
+        for factor in (result.get("protective_factors") or [])
+    ]
+    if risk_driver_names:
+        why_risky = "Risk is elevated primarily by " + ", ".join(risk_driver_names[:3]) + "."
+    else:
+        why_risky = "No risk-increasing factor was triggered by the available values."
+    if protective_names:
+        reduces_risk = "Risk is reduced by " + ", ".join(protective_names[:3]) + "."
+    else:
+        reduces_risk = "No risk-reducing factor was triggered by the available values."
+    could_increase = (
+        "Conditions that could increase risk include declining revenue, negative "
+        "operating margins, weakening liquidity, rising leverage, and negative "
+        "operating cash flow."
+    )
+    st.markdown("<div class='panel-header'><h3>Credit Risk Summary</h3></div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='risk-summary-card {risk_class}'>"
+        f"<div class='risk-state'>{escape(result['risk_category'])}</div>"
+        f"<p><strong>Why this risk level:</strong> {escape(why_risky)}<br>"
+        f"<strong>What reduces risk:</strong> {escape(reduces_risk)}<br>"
+        f"<strong>What could increase risk:</strong> {escape(could_increase)}</p>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "SHAP/explainability is available on the Explainable AI page when a model "
+        "is served for the upload; otherwise the rule-based drivers above are shown."
+    )
 
 elif page == "Explainable AI":
     page_header("Explainable AI", "How the selected model behaves globally and for this individual record.", page="Explainable AI")
@@ -3247,30 +3238,45 @@ elif page == "Explainable AI":
     disclaimer()
 
 elif page == "Early-Warning Indicators":
-    page_header("Early-Warning Indicators", "Transparent heuristics that flag potentially deteriorating conditions.", page="Early-Warning Indicators")
+    page_header("Early Warning Center", "Deterioration alerts ranked by severity, built only from observed values.", page="Early-Warning Indicators")
     st.caption("Rules are configurable research heuristics, not learned predictions or universal thresholds.")
-    selected_flags = flags.iloc[[row_index]].T.rename(columns={row_index: "Triggered"})
-    feature_row = selected_features.iloc[0]
-    warning_requirements = {
-        "Rapid revenue decline": ("Sales_Growth",),
-        "Increasing leverage": ("Debt_to_Assets",),
-        "Falling liquidity": ("Current_Ratio",),
-        "Deteriorating margins": ("EBITDA_Margin", "Net_Profit_Margin"),
-        "Negative operating cash flow": ("Cash_Flow_Operations",),
-        "Increasing receivable days": ("Receivable_Days",),
-        "Falling interest coverage": ("Interest_Coverage",),
-    }
-    selected_flags["Status"] = [
-        "Review" if bool(triggered)
-        else "Not triggered" if any(pd.notna(feature_row.get(name)) for name in warning_requirements.get(signal, ()))
-        else "Not assessed"
-        for signal, triggered in selected_flags["Triggered"].items()
-    ]
-    st.dataframe(selected_flags.drop(columns="Triggered"), width="stretch")
-    st.caption(f"Core-field coverage: {current_assessment['coverage_label']}")
+    detailed = detailed_warnings(frame, features, flags, row_index)
+    triggered = triggered_warnings(detailed)
+    severity_order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
+    severity_counts = {level: sum(1 for w in detailed if w.get("Severity") == level) for level in severity_order}
+    severity_cols = st.columns(len(severity_order))
+    for severity_col, level in zip(severity_cols, severity_order):
+        severity_col.metric(f"{level} alerts", severity_counts[level])
+    st.caption(
+        f"Core-field coverage: {current_assessment['coverage_label']}. "
+        f"{len(triggered)} of {len(detailed)} indicators are currently triggered."
+    )
+    if triggered:
+        st.markdown("<div class='panel-header'><h3>Active Alerts</h3></div>", unsafe_allow_html=True)
+        for warning in triggered:
+            severity = warning.get("Severity", "MEDIUM")
+            severity_class = {
+                "CRITICAL": "critical", "HIGH": "high", "MEDIUM": "watch",
+                "LOW": "healthy", "INFO": "healthy",
+            }.get(severity, "watch")
+            st.markdown(
+                f"<div class='risk-summary-card {severity_class}'>"
+                f"<div class='risk-state'>{escape(severity)} &middot; {escape(str(warning.get('Indicator')))}</div>"
+                f"<p><strong>Actual value:</strong> {escape(str(warning.get('Actual value')))}<br>"
+                f"<strong>Reference:</strong> {escape(str(warning.get('Threshold/reference')))}<br>"
+                f"<strong>Why it matters:</strong> {escape(str(warning.get('Why it matters')))}<br>"
+                f"<strong>Recommended action:</strong> {escape(str(warning.get('Recommended action')))}</p>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+    else:
+        st.info("No early-warning indicator is currently triggered by the observed values.")
+    st.markdown("<div class='panel-header'><h3>Severity Matrix</h3></div>", unsafe_allow_html=True)
+    st.dataframe(pd.DataFrame(detailed), width="stretch", hide_index=True)
     if "company_id" in frame and "period" in frame:
         series = trend_data(frame, selected.iloc[0]["company_id"])
         if len(series) > 1:
+            st.markdown("<div class='panel-header'><h3>Alert Timeline</h3></div>", unsafe_allow_html=True)
             metric = st.selectbox("Historical measure", ["Revenue", "Current_Ratio", "Debt_to_Assets", "EBITDA_Margin", "Interest_Coverage"])
             fig = px.line(
                 series,
@@ -3288,29 +3294,91 @@ elif page == "Early-Warning Indicators":
     disclaimer()
 
 elif page == "Model Performance":
-    page_header("Model Performance", "Exploratory evaluation trained only from a target detected in the active upload.", page="Model Performance")
+    page_header("Model Lab", "Actual quality of the exploratory model trained from a target detected in the active upload.", page="Model Performance")
     model = data_intelligence.get("model", {})
     if model.get("status") != "evaluated":
         st.info(
-            "No usable target was evaluated in this upload. No bundled or demo model is used. "
-            "Upload data with a meaningful target label and sufficient examples to evaluate a model."
+            "Model performance unavailable because no valid target/model exists. "
+            "No bundled or demo model is applied to uploads. Upload data with a "
+            "meaningful target label and sufficient examples to evaluate a model."
         )
     else:
         st.info(model.get("limitation", "Exploratory hold-out model evaluation; not calibrated or deployable for decisions."))
-        performance = {
+        st.markdown("<div class='panel-header'><h3>Model &amp; Training</h3></div>", unsafe_allow_html=True)
+        identity_cols = st.columns(4)
+        identity_cols[0].metric("Model used", model.get("model", "Not available"))
+        identity_cols[1].metric("Target", model.get("target", "Not available"))
+        identity_cols[2].metric("Train / test split", model.get("train_test_split", "Not available"))
+        identity_cols[3].metric("Evaluation records", f"{model.get('test_rows', 0):,}")
+        st.caption(
+            f"Training records: {model.get('train_rows', 0):,}. The model is trained "
+            "only from the active upload on a random hold-out split; it is not a "
+            "calibrated probability of default."
+        )
+        classification_metrics = {
             key: value for key, value in model.items()
-            if key in {"accuracy", "balanced_accuracy", "mae", "r2"}
+            if key in {"accuracy", "balanced_accuracy", "precision", "recall", "f1", "roc_auc"}
         }
-        st.metric("Model", model.get("model", "Not available"))
-        st.metric("Target", model.get("target", "Not available"))
-        st.metric("Evaluation records", f"{model.get('test_rows', 0):,}")
-        if performance:
-            st.dataframe(
-                pd.DataFrame([performance]).T.rename(columns={0: "Hold-out result"}),
-                width="stretch",
+        regression_metrics = {
+            key: value for key, value in model.items()
+            if key in {"mae", "r2"}
+        }
+        st.markdown("<div class='panel-header'><h3>Hold-out Metrics</h3></div>", unsafe_allow_html=True)
+        if classification_metrics:
+            classification_cols = st.columns(len(classification_metrics))
+            for metric_col, (metric_name, metric_value) in zip(classification_cols, classification_metrics.items()):
+                metric_col.metric(
+                    metric_name.replace("_", " ").title(),
+                    f"{metric_value:.1%}" if metric_value is not None else "Not available",
+                )
+        if regression_metrics:
+            regression_cols = st.columns(len(regression_metrics))
+            for metric_col, (metric_name, metric_value) in zip(regression_cols, regression_metrics.items()):
+                metric_col.metric(
+                    metric_name.replace("_", " ").upper(),
+                    f"{metric_value:.3g}" if metric_value is not None else "Not available",
+                )
+        confusion = model.get("confusion_matrix")
+        if confusion:
+            st.markdown("<div class='panel-header'><h3>Confusion Matrix</h3></div>", unsafe_allow_html=True)
+            st.dataframe(pd.DataFrame(confusion), width="stretch", hide_index=True)
+        roc_curve_data = model.get("roc_curve")
+        if roc_curve_data and model.get("roc_auc") is not None:
+            st.markdown("<div class='panel-header'><h3>ROC Curve</h3></div>", unsafe_allow_html=True)
+            roc_figure = go.Figure()
+            roc_figure.add_trace(go.Scatter(
+                x=roc_curve_data["fpr"],
+                y=roc_curve_data["tpr"],
+                mode="lines",
+                name=f"ROC (AUC = {model['roc_auc']:.2f})",
+                line={"color": G4, "width": 2},
+            ))
+            roc_figure.add_trace(go.Scatter(
+                x=[0, 1],
+                y=[0, 1],
+                mode="lines",
+                name="Random",
+                line={"color": NEUTRAL, "width": 1, "dash": "dash"},
+            ))
+            roc_figure.update_layout(
+                xaxis_title="False positive rate",
+                yaxis_title="True positive rate",
+                showlegend=True,
             )
+            render_chart(roc_figure, height=320)
         if model.get("top_features"):
-            st.dataframe(pd.DataFrame(model["top_features"]), width="stretch", hide_index=True)
+            st.markdown("<div class='panel-header'><h3>Feature Importance</h3></div>", unsafe_allow_html=True)
+            st.dataframe(
+                pd.DataFrame(model["top_features"]).rename(
+                    columns={"feature": "Feature", "importance": "Relative importance"}
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+        st.caption(
+            "SHAP explainability is available on the Explainable AI page when a "
+            "model is served for the upload."
+        )
     disclaimer()
 
 elif page == "Stress Testing":
@@ -3323,26 +3391,43 @@ elif page == "Model Monitoring":
     render_monitoring_page(bundle)
 
 elif page == "Portfolio Intelligence":
-    page_header("Portfolio Intelligence", "Entity-level screening summary across the uploaded records.", page="Portfolio Intelligence")
+    page_header("Portfolio Command", "Entity-level screening summary across the uploaded records.", page="Portfolio Intelligence")
     scores = _cached_screening_scores(dataset_key, _bundle_signature(bundle))
     intel = portfolio_intelligence(frame, scores)
     if not intel.get("available"):
         st.info(intel.get("reason", "No screening scores are available for this dataset."))
     else:
         if not intel["multi_entity"]:
-            st.caption("This dataset contains a single entity, so entity-level comparisons are limited.")
+            st.caption(
+                "This dataset contains a single entity, so entity-level comparisons are "
+                "limited. Portfolio analysis requires multiple entities."
+            )
         intel_metrics = st.columns(4)
         intel_metrics[0].metric("Entities", f"{intel['entities']:,}")
         intel_metrics[1].metric("Mean risk index", f"{intel['avg_risk']:.1f}/100" if intel["avg_risk"] is not None else "Not available")
         intel_metrics[2].metric("Mean health score", f"{intel['avg_health']:.1f}/100" if intel["avg_health"] is not None else "Not available")
         intel_metrics[3].metric("High-risk share", f"{intel['high_share']:.1%}" if intel["high_share"] is not None else "Not available")
         st.caption("Screening indices are transparent rule-based scores (0-100), not model default probabilities.")
-        st.markdown("<div class='panel-header'><h3>Risk Band Distribution</h3></div>", unsafe_allow_html=True)
-        st.dataframe(
-            pd.DataFrame([{"Risk band": str(band), "Records": count} for band, count in sorted(intel["bands"].items(), key=lambda item: item[1], reverse=True)]),
-            width="stretch",
-            hide_index=True,
-        )
+        tiers = intel.get("risk_tiers") or {}
+        if tiers:
+            tier_cols = st.columns(len(tiers))
+            for tier_col, (tier_name, tier_count) in zip(tier_cols, tiers.items()):
+                tier_col.metric(tier_name, f"{tier_count:,}")
+        st.markdown("<div class='panel-header'><h3>Portfolio Risk Distribution</h3></div>", unsafe_allow_html=True)
+        band_frame = pd.DataFrame(
+            [{"Risk band": str(band), "Records": count} for band, count in intel["bands"].items()]
+        ).sort_values("Records", ascending=True)
+        if not band_frame.empty:
+            band_figure = go.Figure(go.Bar(
+                x=band_frame["Records"],
+                y=band_frame["Risk band"],
+                orientation="h",
+                marker={"color": [band_colour(str(band)) for band in band_frame["Risk band"]]},
+            ))
+            band_figure.update_layout(xaxis_title="Records", yaxis_title=None, showlegend=False)
+            render_chart(band_figure, height=280)
+        else:
+            st.info("No risk band could be calculated from the available fields.")
         entity_cols = st.columns(2)
         with entity_cols[0]:
             st.markdown("<div class='panel-header'><h3>Highest Mean Risk Index</h3></div>", unsafe_allow_html=True)
@@ -3360,9 +3445,31 @@ elif page == "Portfolio Intelligence":
             st.markdown("<div class='panel-header'><h3>Entity Concentration</h3></div>", unsafe_allow_html=True)
             st.metric("Largest entity share", f"{intel['largest_entity_share']:.1%}")
             st.caption(f"Largest entity: {intel['largest_entity']}")
+        geo = intel.get("geo_concentration") or []
+        if geo:
+            st.markdown("<div class='panel-header'><h3>Geographic Concentration</h3></div>", unsafe_allow_html=True)
+            st.dataframe(pd.DataFrame(geo), width="stretch", hide_index=True)
+        anomaly = intel.get("anomaly_concentration")
+        if anomaly:
+            st.markdown("<div class='panel-header'><h3>Anomaly Concentration</h3></div>", unsafe_allow_html=True)
+            st.metric("Anomalous record share", f"{anomaly['share']:.1%}")
+            st.caption(f"Detected from the '{anomaly['column']}' column.")
         if intel["concentrations"]:
             st.markdown("<div class='panel-header'><h3>Segment Concentration</h3></div>", unsafe_allow_html=True)
             st.dataframe(pd.DataFrame(intel["concentrations"]), width="stretch", hide_index=True)
+        trend = intel.get("trend")
+        if trend:
+            st.markdown("<div class='panel-header'><h3>Portfolio Trend</h3></div>", unsafe_allow_html=True)
+            trend_frame = pd.DataFrame(trend)
+            trend_figure = px.line(
+                trend_frame,
+                x="period",
+                y="mean_risk",
+                markers=True,
+                title="Mean risk index by period",
+                color_discrete_sequence=[G3],
+            )
+            render_chart(trend_figure, height=280)
         disclaimer()
 
 elif page == "Reports":
@@ -3439,11 +3546,59 @@ elif page == "Reports":
         )
     st.markdown("<div class='panel-header'><h3>Company Reports</h3></div>", unsafe_allow_html=True)
     reports_company = str(frame.iloc[row_index].get("company_id", "Selected Company"))
+    reports_period = str(selected.iloc[0].get("period", "Not identified"))
     st.caption(
-        f"Credit assessment PDF and Excel analysis for the selected company-period "
-        f"(currently: {reports_company}) are generated on the Executive Overview and "
-        "Credit Assessment pages."
+        f"Reports are built on demand from the current analysis of "
+        f"{reports_company} ({reports_period}). No data leaves this session."
     )
+    company_report_cache = st.session_state.setdefault("_company_reports_cache", {})
+    company_report_key = (selection_cache_key, reports_company, reports_period)
+    company_report = company_report_cache.setdefault(company_report_key, {})
+    report_detailed = detailed_warnings(frame, features, flags, row_index)
+    report_drivers = [dict(factor) for factor in (current_assessment.get("top_risk_factors") or [])]
+    report_cols = st.columns(2)
+    with report_cols[0]:
+        render_report_card(
+            "Executive Report",
+            "Assessment, top risk drivers, early warnings, and recommendations.",
+            company_report, "executive_pdf",
+            lambda: create_executive_pdf(
+                reports_company, reports_period, current_assessment,
+                financial_analysis, active_warning_signals, recommendations,
+            ),
+            f"{reports_company.replace(' ', '_')}_executive_report.pdf",
+        )
+        render_report_card(
+            "Credit Risk Report",
+            "Risk assessment, risk drivers, and early warnings.",
+            company_report, "credit_risk_pdf",
+            lambda: create_credit_risk_pdf(
+                reports_company, reports_period, current_assessment,
+                active_warning_signals, report_drivers,
+            ),
+            f"{reports_company.replace(' ', '_')}_credit_risk_report.pdf",
+        )
+    with report_cols[1]:
+        render_report_card(
+            "Financial Health Report",
+            "Observed financial ratios for the selected company-period.",
+            company_report, "financial_health_pdf",
+            lambda: create_financial_health_pdf(
+                reports_company, reports_period, financial_analysis,
+            ),
+            f"{reports_company.replace(' ', '_')}_financial_health_report.pdf",
+        )
+        render_report_card(
+            "Early Warning Report",
+            "Severity-ranked early-warning indicators with recommended actions.",
+            company_report, "early_warning_pdf",
+            lambda: create_early_warning_pdf(
+                reports_company, reports_period, report_detailed,
+            ),
+            f"{reports_company.replace(' ', '_')}_early_warning_report.pdf",
+        )
+    if len(company_report_cache) > 16:
+        company_report_cache.pop(next(iter(company_report_cache)), None)
     disclaimer()
 
 elif page == "Methodology":

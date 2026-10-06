@@ -93,6 +93,27 @@ def analyze_financials(
         cash_flow / revenue if cash_flow is not None and revenue not in (None, 0) else None
     )
     ratios["Sales Growth"] = _finite(feature.get("Sales_Growth"))
+
+    # ROCE: operating return on capital employed (EBITDA over capital employed).
+    ebitda = _finite(row.get("EBITDA"))
+    capital_employed = (
+        assets - current_liabilities
+        if assets is not None and current_liabilities is not None
+        else None
+    )
+    ratios["ROCE"] = (
+        ebitda / capital_employed
+        if ebitda is not None and capital_employed not in (None, 0)
+        else None
+    )
+    # Gross profit / margin are only shown when cost of goods sold is observed.
+    cogs = _finite(row.get("Cost_of_Goods_Sold"))
+    if revenue is not None and cogs is not None:
+        ratios["Gross Profit"] = revenue - cogs
+        ratios["Gross Margin"] = (revenue - cogs) / revenue if revenue != 0 else None
+    else:
+        ratios["Gross Profit"] = None
+        ratios["Gross Margin"] = None
     return {
         "ratios": ratios,
         "coverage_count": len(available),
