@@ -1144,8 +1144,24 @@ if "company_id" in frame:
 else:
     company_rows = list(range(len(frame)))
 
+# When the company changes, reset the period widget to the first valid record
+# of the new company. A stale widget value (carried over from the previous
+# company's option list) can otherwise point at a row that no longer belongs
+# to it, so every downstream display would render the previous company's
+# record instead of the selected one. Resolve the row by its selected
+# position, then render the option list using that resolved row.
+if company_rows:
+    current_period_value = st.session_state.get("period_filter")
+    if current_period_value not in company_rows:
+        st.session_state["period_filter"] = company_rows[0]
+        row_index = company_rows[0]
+    else:
+        row_index = current_period_value
+else:
+    row_index = 0
+
 with selector_cols[1]:
-    row_index = st.selectbox(
+    st.selectbox(
         "Period",
         options=company_rows,
         format_func=lambda index: str(
