@@ -114,6 +114,11 @@ html, body { width:100%; max-width:100%; overflow-x:hidden; }
 .stApp, [data-testid="stAppViewContainer"] { background:var(--page); }
 header[data-testid="stHeader"] { background:rgba(240,253,244,.85); }
 
+/* ── Page shell containers ── */
+[data-testid="stMainBlockContainer"] { max-width:100% !important; padding-top:.6rem !important; padding-bottom:2.5rem !important; }
+[data-testid="stMain"] { padding:0 !important; }
+[data-testid="column"] { max-width:100% !important; flex:1 1 100% !important; min-width:0 !important; padding:0 !important; }
+
 /* Soft gradient wash, the dashboard echo of the SkillseED agri backdrop */
 [data-testid="stAppViewContainer"]::before {
     content:"";
@@ -180,6 +185,31 @@ a { color:var(--g3) !important; }
     border-right:1px solid rgba(16,185,129,.14);
 }
 [data-testid="stSidebar"] { min-width:15rem !important; max-width:15rem !important; }
+
+/* Mobile: sidebar becomes a full-width overlay when open */
+@media (max-width: 768px) {
+    [data-testid="stSidebar"] {
+        min-width:0 !important;
+        max-width:100% !important;
+        width:100% !important;
+        position:fixed;
+        top:0;
+        left:0;
+        bottom:0;
+        z-index:1000;
+        box-shadow:0 0 30px rgba(6,78,59,.25);
+        -webkit-overflow-scrolling:touch;
+    }
+    [data-testid="stSidebar"] [data-testid="stRadio"] label {
+        font-size:1rem;
+        padding:.75rem 1rem !important;
+        border-radius:8px !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {
+        background:linear-gradient(135deg,var(--g3),var(--g4)) !important;
+        box-shadow:0 4px 18px rgba(5,150,105,.28) !important;
+    }
+}
 [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2,
 [data-testid="stSidebar"] h3, [data-testid="stSidebar"] h4,
 [data-testid="stSidebar"] h5, [data-testid="stSidebar"] h6 {
@@ -417,6 +447,26 @@ a { color:var(--g3) !important; }
     50% { transform:translateY(-5px); }
 }
 .hero-text { position:relative; min-width:14rem; flex:1 1 20rem; }
+
+/* ── Responsive grids ── */
+.assessment-grid, .assessment-meta, .workflow-grid, .about-grid, .kpi-grid {
+    display:grid;
+}
+@media (max-width: 768px) {
+    .assessment-grid, .assessment-meta, .workflow-grid, .about-grid {
+        grid-template-columns:1fr !important;
+    }
+    .workflow-step { min-height:80px !important; padding:.6rem .5rem !important; }
+    .workflow-step .title { font-size:.72rem !important; }
+    .workflow-step .tag { font-size:9px !important; }
+    .about-tile { padding:.8rem .85rem !important; }
+    .about-tile h4 { font-size:1rem !important; }
+    .about-tile p { font-size:.78rem !important; }
+    .kpi-grid { grid-template-columns:repeat(2, 1fr) !important; }
+}
+@media (max-width: 480px) {
+    .kpi-grid { grid-template-columns:1fr !important; }
+}
 .hero-tag {
     display:inline-flex;
     align-items:center;
@@ -1028,18 +1078,57 @@ a { color:var(--g3) !important; }
     [data-testid="stFileUploader"], [data-baseweb="select"] {
         width:100%; max-width:100%; min-width:0;
     }
-    .page-hero { padding:1rem; gap:.9rem; }
-    .hero-icon { width:48px; height:48px; font-size:1.3rem; }
-    .hero-text h2 { font-size:1.4rem; }
-    .profile-photo { width:120px; height:120px; }
-    h1 { font-size:clamp(1.7rem, 7vw, 2.1rem); }
-    h2 { font-size:clamp(1.35rem, 5.5vw, 1.65rem); }
-    h3 { font-size:clamp(1.15rem, 4.5vw, 1.35rem); }
+    .page-hero { padding:0.8rem 1rem; gap:.9rem; }
+    .hero-icon { width:40px; height:40px; font-size:1rem; }
+    .hero-text h2 { font-size:1.1rem; }
+    .profile-photo { width:100px; height:100px; }
+
+    /* Streamlit columns: wrap all multi-column grids */
+    [data-testid="stHorizontalBlock"] { flex-wrap:wrap; gap:.65rem; min-width:0; }
+    [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+        flex:1 1 100% !important;
+        width:100% !important;
+        min-width:0 !important;
+    }
+
+    /* Buttons touch target */
+    .stApp button, .stApp [role="button"] {
+        min-height:44px !important;
+        min-width:44px !important;
+    }
+
+    /* Charts */
+    [data-testid="stPlotlyChart"], [data-testid="stImage"] {
+        width:100% !important;
+        max-width:100% !important;
+        min-width:0 !important;
+    }
 }
+
+/* ── Ultra-compact mobile ── */
+@media (max-width: 480px) {
+    [data-testid="stMainBlockContainer"] { padding:0.6rem 0.8rem 1.2rem !important; }
+    .topbar-brand h1 { font-size:1.35rem !important; }
+    .topbar-brand .subtitle { font-size:.75rem !important; line-height:1.3 !important; }
+    .panel-header h3 { font-size:1rem !important; }
+    [data-testid="stMetricValue"] { font-size:1.1rem !important; }
+    .kpi-card { padding:.65rem 0.75rem !important; min-height:0 !important; }
+    .kpi-value { font-size:1.25rem !important; }
+    .kpi-label { font-size:.68rem !important; }
+    .stApp button, .stApp [role="button"] {
+        min-height:44px !important;
+        min-width:44px !important;
+    }
+}
+}
+    }
+}
+
 @media (prefers-reduced-motion: reduce) {
     .page-hero, .hero-icon, .live-badge::before, .kpi-card { animation:none !important; }
     .kpi-card:hover, .about-tile:hover, .workflow-step:hover { transform:none; }
 }
+</style>
 </style>
 """
 
