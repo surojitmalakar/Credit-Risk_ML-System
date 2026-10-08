@@ -117,7 +117,8 @@ header[data-testid="stHeader"] { background:rgba(240,253,244,.85); }
 /* ── Page shell containers ── */
 [data-testid="stMainBlockContainer"] { max-width:100% !important; padding-top:.6rem !important; padding-bottom:2.5rem !important; }
 [data-testid="stMain"] { padding:0 !important; }
-[data-testid="column"] { max-width:100% !important; flex:1 1 100% !important; min-width:0 !important; padding:0 !important; }
+/* Base columns stay fluid on desktop; stacking is applied only inside mobile queries below. */
+[data-testid="column"] { min-width:0; max-width:100%; }
 
 /* Soft gradient wash, the dashboard echo of the SkillseED agri backdrop */
 [data-testid="stAppViewContainer"]::before {
@@ -185,31 +186,7 @@ a { color:var(--g3) !important; }
     border-right:1px solid rgba(16,185,129,.14);
 }
 [data-testid="stSidebar"] { min-width:15rem !important; max-width:15rem !important; }
-
-/* Mobile: sidebar becomes a full-width overlay when open */
-@media (max-width: 768px) {
-    [data-testid="stSidebar"] {
-        min-width:0 !important;
-        max-width:100% !important;
-        width:100% !important;
-        position:fixed;
-        top:0;
-        left:0;
-        bottom:0;
-        z-index:1000;
-        box-shadow:0 0 30px rgba(6,78,59,.25);
-        -webkit-overflow-scrolling:touch;
-    }
-    [data-testid="stSidebar"] [data-testid="stRadio"] label {
-        font-size:1rem;
-        padding:.75rem 1rem !important;
-        border-radius:8px !important;
-    }
-    [data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {
-        background:linear-gradient(135deg,var(--g3),var(--g4)) !important;
-        box-shadow:0 4px 18px rgba(5,150,105,.28) !important;
-    }
-}
+[data-testid="stSidebarCollapseButton"] { display:flex !important; visibility:visible !important; }
 [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2,
 [data-testid="stSidebar"] h3, [data-testid="stSidebar"] h4,
 [data-testid="stSidebar"] h5, [data-testid="stSidebar"] h6 {
@@ -1041,67 +1018,81 @@ a { color:var(--g3) !important; }
 .site-footer a { color:var(--g8); text-decoration:none; }
 .site-footer a:hover { color:#fff; }
 
-/* ── Responsive ── */
+/* ── Responsive: tablet + mobile ──
+   Base layout stays fluid on desktop. Only these queries stack columns or
+   bound the sidebar, so navigation never consumes half a phone screen. */
+@media (max-width: 992px) {
+    [data-testid="stMainBlockContainer"] { padding:1rem clamp(12px, 4vw, 22px) 2rem; }
+    .topbar { align-items:flex-start; }
+    .creator-credit { text-align:left; }
+    .page-hero { gap:1rem; padding:1rem 1.1rem; }
+    .about-grid, .feature-chips, .insights-grid, .cards { grid-template-columns:1fr 1fr; }
+}
 @media (max-width: 767px) {
-    [data-testid="stMainBlockContainer"] { padding:1rem clamp(12px, 4vw, 18px) 2rem; }
+    [data-testid="stAppViewContainer"] { overflow-x:hidden; }
+    [data-testid="stMainBlockContainer"] { padding:0.9rem clamp(10px, 4vw, 16px) 2rem; }
+    /* Stack Streamlit columns vertically only on small screens. */
     [data-testid="stHorizontalBlock"] { flex-wrap:wrap; gap:.65rem; min-width:0; }
     [data-testid="stHorizontalBlock"] > [data-testid="column"] {
         flex:1 1 100% !important;
         width:100% !important;
         min-width:0 !important;
+        max-width:100% !important;
     }
+    /* Native collapsible sidebar becomes a bounded overlay, never full-width. */
     [data-testid="stSidebar"][aria-expanded="true"] {
-        width:min(72vw, 16rem) !important;
-        min-width:min(72vw, 16rem) !important;
-        max-width:72vw !important;
+        width:min(78vw, 17rem) !important;
+        min-width:min(78vw, 17rem) !important;
+        max-width:78vw !important;
     }
-    [data-testid="stSidebar"] { min-width:0 !important; max-width:none !important; }
+    [data-testid="stSidebar"][aria-expanded="false"] {
+        min-width:0 !important;
+        max-width:0 !important;
+    }
     [data-testid="stSelectbox"], [data-testid="stFileUploader"],
     [data-baseweb="popover"], [role="listbox"] {
-        width:100%; max-width:100vw; min-width:0;
+        width:100%; max-width:100%; min-width:0;
     }
     [role="listbox"] { max-height:min(55vh, 24rem); overflow-y:auto; }
-    [data-testid="stMetric"] { width:100%; padding:14px; }
-    .kpi-card { min-height:0; padding:.8rem .9rem; }
-    .topbar { padding:.15rem 0 .5rem; }
-    .topbar-brand .subtitle { font-size:.86rem; line-height:1.4; }
-    .panel-header { margin:.9rem 0 .5rem; }
-    .panel { padding:.7rem; }
-    .assessment-card { padding:.85rem; margin:.7rem 0 1rem; }
-    .assessment-grid, .assessment-meta, .workflow-grid { grid-template-columns:1fr; }
-    .workflow-step::after { content:""; }
-    .about-grid { grid-template-columns:1fr; }
+    .stApp input, .stApp select, .stApp textarea {
+        font-size:16px !important;
+        max-width:100%;
+    }
+    [data-testid="stMetric"] { width:100%; padding:12px; }
+    [data-testid="stMetricValue"] { font-size:1.25rem; }
     [data-testid="stDataFrame"], [data-testid="stTable"] {
-        max-width:100%; overflow-x:auto; white-space:nowrap;
+        max-width:100%; overflow-x:auto;
     }
     [data-testid="stPlotlyChart"], [data-testid="stImage"],
     [data-testid="stFileUploader"], [data-baseweb="select"] {
         width:100%; max-width:100%; min-width:0;
     }
+    .kpi-card { min-height:0; padding:.8rem .9rem; overflow-wrap:anywhere; }
+    .topbar { padding:.15rem 0 .5rem; }
+    .topbar-brand .subtitle { font-size:.86rem; line-height:1.4; }
     .page-hero { padding:0.8rem 1rem; gap:.9rem; }
     .hero-icon { width:40px; height:40px; font-size:1rem; }
-    .hero-text h2 { font-size:1.1rem; }
+    .hero-text h2 { font-size:clamp(1.05rem, 4.5vw, 1.3rem); overflow-wrap:anywhere; }
+    h1 { font-size:clamp(1.5rem, 6vw, 2rem) !important; overflow-wrap:anywhere; }
+    h2 { font-size:clamp(1.2rem, 5vw, 1.5rem) !important; overflow-wrap:anywhere; }
     .profile-photo { width:100px; height:100px; }
-
-    /* Streamlit columns: wrap all multi-column grids */
-    [data-testid="stHorizontalBlock"] { flex-wrap:wrap; gap:.65rem; min-width:0; }
-    [data-testid="stHorizontalBlock"] > [data-testid="column"] {
-        flex:1 1 100% !important;
-        width:100% !important;
-        min-width:0 !important;
-    }
-
-    /* Buttons touch target */
+    .panel-header { margin:.9rem 0 .5rem; }
+    .panel { padding:.7rem; }
+    .assessment-card { padding:.85rem; margin:.7rem 0 1rem; }
+    .assessment-grid, .assessment-meta, .workflow-grid { grid-template-columns:1fr; }
+    .workflow-step::after { content:""; }
+    .about-grid, .feature-chips, .insights-grid, .cards { grid-template-columns:1fr; }
     .stApp button, .stApp [role="button"] {
         min-height:44px !important;
-        min-width:44px !important;
+        width:100%;
+        max-width:100%;
+        white-space:normal;
+        overflow-wrap:anywhere;
     }
-
-    /* Charts */
-    [data-testid="stPlotlyChart"], [data-testid="stImage"] {
-        width:100% !important;
-        max-width:100% !important;
-        min-width:0 !important;
+    [data-testid="stSidebar"] [data-testid="stRadio"] label {
+        font-size:1rem;
+        padding:.7rem .9rem !important;
+        border-radius:10px !important;
     }
 }
 
@@ -1115,12 +1106,10 @@ a { color:var(--g3) !important; }
     .kpi-card { padding:.65rem 0.75rem !important; min-height:0 !important; }
     .kpi-value { font-size:1.25rem !important; }
     .kpi-label { font-size:.68rem !important; }
-    .stApp button, .stApp [role="button"] {
-        min-height:44px !important;
-        min-width:44px !important;
-    }
-}
-}
+    [data-testid="stSidebar"][aria-expanded="true"] {
+        width:min(84vw, 16rem) !important;
+        min-width:min(84vw, 16rem) !important;
+        max-width:84vw !important;
     }
 }
 
@@ -1128,7 +1117,6 @@ a { color:var(--g3) !important; }
     .page-hero, .hero-icon, .live-badge::before, .kpi-card { animation:none !important; }
     .kpi-card:hover, .about-tile:hover, .workflow-step:hover { transform:none; }
 }
-</style>
 </style>
 """
 

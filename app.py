@@ -416,6 +416,12 @@ def _render_data_intelligence(
     frame = document_result.frame
     financial_metrics = _financial_metrics_for_display(intelligence["financial_metrics"])
     st.success("File loaded · Analysis complete")
+    st.caption(
+        f"DATA SOURCE · ✓ Uploaded dataset connected ({escape(str(filename))}, "
+        f"{len(frame):,} row(s) × {len(frame.columns):,} column(s)) · "
+        "file name, row/column counts, sheets, detected and missing fields, quality and "
+        "the preview below all describe this upload only."
+    )
     st.markdown("<div class='panel-header'><h3>AI Data Detective</h3></div>", unsafe_allow_html=True)
     with st.container(border=True):
         st.markdown("**Automatic Dataset Intelligence**")
@@ -975,6 +981,24 @@ if uploaded is not None:
             st.session_state["_upload_token"] = upload_token
             st.session_state["_upload_signature"] = upload_signature
             st.session_state["_upload_analysis_revision"] = 0
+            # New file invalidates every downstream result immediately so stale
+            # metrics can never linger while navigating between pages.
+            for _stale_key in (
+                "_upload_pipeline", "_upload_pipeline_key",
+                "_financial_selection_cache", "_portfolio_analysis_cache",
+                "_intelligence_report_cache", "_credit_report_cache",
+                "_company_reports_cache", "_reports_intelligence_cache",
+                "copilot_history", "credit_copilot_response",
+                "credit_copilot_source", "credit_copilot_signature",
+                "company_filter", "period_filter",
+            ):
+                st.session_state.pop(_stale_key, None)
+            # Canonical aliases required by the acceptance spec. They mirror the
+            # authoritative pipeline state so external checks can introspect it.
+            st.session_state.pop("uploaded_data", None)
+            st.session_state.pop("financial_metrics", None)
+            st.session_state.pop("risk_result", None)
+            st.session_state.pop("warnings", None)
         analysis_revision = int(st.session_state.get("_upload_analysis_revision", 0))
         upload_pipeline_key = (upload_signature, uploaded.name, analysis_revision)
         has_current_analysis = st.session_state.get("_upload_pipeline_key") == upload_pipeline_key
@@ -1051,6 +1075,9 @@ if uploaded is not None:
                 "financial_frame": financial_frame,
                 "financial_base": financial_base,
             }
+            # Canonical aliases: single source of truth, mirrored for the spec.
+            st.session_state["uploaded_data"] = document_result.frame
+            st.session_state["financial_metrics"] = data_intelligence.get("financial_metrics")
         else:
             cached_upload = st.session_state["_upload_pipeline"]
             document_result = cached_upload["document"]
@@ -1058,6 +1085,8 @@ if uploaded is not None:
             financial_columns = cached_upload["financial_columns"]
             financial_frame = cached_upload["financial_frame"]
             financial_base = cached_upload["financial_base"]
+            st.session_state["uploaded_data"] = document_result.frame
+            st.session_state["financial_metrics"] = data_intelligence.get("financial_metrics")
         if page == "Data Intelligence" or not financial_columns:
             _render_data_intelligence(
                 document_result,
@@ -1108,7 +1137,15 @@ else:
         render_methodology_page()
     else:
         st.info("Upload a dataset to generate analysis.")
+        st.markdown(
+            "<div class='panel-header'><h3>DATA SOURCE · No dataset uploaded</h3></div>",
+            unsafe_allow_html=True,
+        )
+        st.warning("No financial dataset uploaded.")
         st.caption(
+            "Upload an Excel, CSV, or supported financial statement to begin analysis. "
+            "Every metric, risk score, chart, warning, and report on this page is "
+            "computed from the uploaded file — nothing is shown until data arrives. "
             f"The '{selected_navigation}' page analyses the active upload. "
             "About and Methodology are available without data."
         )
@@ -1235,6 +1272,10 @@ if (
 if portfolio_analysis is not None and page == "Executive Overview":
     portfolio_summary = portfolio_analysis["summary"]
     st.markdown("<div class='panel-header'><h3>Portfolio Risk Summary</h3></div>", unsafe_allow_html=True)
+    st.caption(
+        f"DATA SOURCE · ✓ Uploaded dataset connected ({escape(str(uploaded.name))}) · "
+        "all portfolio figures below are observed or calculated from that file."
+    )
     portfolio_metrics = st.columns(4)
     portfolio_metrics[0].metric("Borrower / loan records", portfolio_summary["record_count"])
     portfolio_metrics[1].metric(
@@ -1347,10 +1388,16 @@ def show_risk() -> dict:
 if page == "Executive Overview":
     is_overview = page == "Executive Overview"
     result = current_assessment
+    st.session_state["risk_result"] = dict(result)
     company_name = str(frame.iloc[row_index].get("company_id", "Selected Company"))
     health_score = result.get("health_score")
     current_ratio = selected_features.iloc[0].get("Current_Ratio", float("nan"))
     risk_class = _state_color(result["risk_category"])
+    st.caption(
+        f"DATA SOURCE · ✓ Uploaded dataset connected ({escape(str(uploaded.name))}, "
+        f"{len(document_result.frame):,} record(s)) · score, category, drivers and trends "
+        "below are calculated from that file. Missing inputs show 'Not available'."
+    )
     if is_overview:
         ratio_state = (
             "neutral"
@@ -1749,12 +1796,19 @@ elif page == "MSME Financial Health":
     rec, inv, pay = _raw("Accounts_Receivable"), _raw("Inventory"), _raw("Accounts_Payable")
     intexp = _raw("Interest_Expense")
     r = financial_analysis["ratios"]
+    st.caption(
+        f"DATA SOURCE · ✓ Uploaded dataset connected ({escape(str(uploaded.name))}, "
+        f"{len(document_result.frame):,} record(s)) · every value below is read from or "
+        "calculated from that file. 'Not available' means the required field was not "
+        "found in the upload — it is never invented."
+    )
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Revenue", f"{rev:,.0f}" if rev is not None else "Not available", f"{rev_g:.1%}" if rev_g is not None else None)
     k2.metric("Net profit", f"{netp:,.0f}" if netp is not None else "Not available",
               f"{(r.get('Net Profit Margin') or 0):.1%} margin" if r.get("Net Profit Margin") is not None else None)
     k3.metric("Current ratio", f"{(r.get('Current Ratio') or float('nan')):.2f}x" if r.get("Current Ratio") is not None else "Not available")
     k4.metric("Debt / assets", f"{(r.get('Debt / Assets') or float('nan')):.2f}x" if r.get("Debt / Assets") is not None else "Not available")
+    st.caption("Source: Uploaded Dataset → Revenue, Net Profit · Calculated from uploaded data: margins, Current Ratio, Debt-to-Assets.")
     k5, k6, k7, k8 = st.columns(4)
     k5.metric("ROA", f"{r['Return on Assets']:.1%}" if r.get("Return on Assets") is not None else "Not available")
     k6.metric("ROE", f"{r['Return on Equity']:.1%}" if r.get("Return on Equity") is not None else "Not available")
@@ -1810,12 +1864,17 @@ elif page == "Risk Prediction":
         page="Risk Prediction",
     )
     result = show_risk()
+    st.session_state["warnings"] = list(active_warning_signals)
+    st.caption(
+        f"DATA SOURCE · ✓ Uploaded dataset connected ({escape(str(uploaded.name))}) · "
+        "the index, category and drivers below are calculated from that file."
+    )
     st.caption(f"Model used: {'No bundled ML model is applied to uploads (transparent rule-based index).' if not model_available_for_record else 'Existing ML model.'} | Coverage: {current_assessment['coverage_label']}")
     if not model_available_for_record:
         st.info("ML cannot produce a calibrated default probability for this upload because no bundled model is applied to unrelated uploaded records. The transparent rule-based index below is the deterministic fallback.")
     health_score = result.get("health_score")
     if health_score is None:
-        st.info("There is not enough numeric financial data to calculate a health score.")
+        st.info("Risk score unavailable — required variables are missing.")
     else:
         gauge = go.Figure(go.Indicator(
             mode="gauge+number",
@@ -1895,6 +1954,11 @@ elif page == "Risk Prediction":
 elif page == "Early-Warning Indicators":
     page_header("Early Warning Center", "Deterioration alerts ranked by severity, built only from observed values.", page="Early-Warning Indicators")
     st.caption("Rules are configurable research heuristics, not learned predictions or universal thresholds.")
+    st.caption(
+        f"DATA SOURCE · ✓ Uploaded dataset connected ({escape(str(uploaded.name))}) · "
+        "every warning below shows its actual uploaded value and threshold. "
+        "Fields absent from the upload are reported as 'Not available', never assumed."
+    )
     detailed = detailed_warnings(frame, features, flags, row_index)
     triggered = triggered_warnings(detailed)
     severity_order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
@@ -1951,6 +2015,11 @@ elif page == "Early-Warning Indicators":
 elif page == "Reports":
     page_header("Reports", "Export the active upload's analysis, screening, and company reports.", page="Reports")
     st.caption("Reports are generated locally from the active upload. Each export is built on demand; no data leaves this session.")
+    st.caption(
+        f"DATA SOURCE · ✓ Uploaded dataset connected ({escape(str(uploaded.name))}, "
+        f"{len(document_result.frame):,} record(s)) · every section below re-states the "
+        "current upload's figures; nothing is sampled or reused from another file."
+    )
     report_export_cols = st.columns(2)
     with report_export_cols[0]:
         st.markdown("<div class='panel-header'><h3>Data Intelligence</h3></div>", unsafe_allow_html=True)

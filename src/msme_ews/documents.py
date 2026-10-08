@@ -184,18 +184,19 @@ def _normalize_tabular_columns(frame: pd.DataFrame) -> tuple[pd.DataFrame, list[
         key = _clean_key(column)
         financial = _metric(column)
         canonical = financial or _TABULAR_ALIASES.get(key)
-        if canonical is None and key in {"period", "year", "financial year", "fiscal year", "date", "reporting period"}:
+        if canonical is None and key in {"period", "year", "financial year", "fiscal year", "date", "reporting period", "month", "quarter"}:
             canonical = "period"
-        if canonical is None and key in {"customer id", "customer number", "borrower number", "member id"}:
+        if canonical is None and key in {"customer id", "customer number", "borrower number", "member id", "client id", "account id"}:
             canonical = "customer_id"
         if canonical is None and key in {
             "income", "annual income", "yearly income", "monthly income",
-            "salary", "annual salary", "annual revenue",
+            "salary", "annual salary", "annual revenue", "total sales",
+            "annual sales", "net sales", "sales",
         }:
             canonical = "Revenue"
-        if canonical is None and key == "profit":
+        if canonical is None and key in {"profit", "earnings", "net income"}:
             canonical = "Net_Profit"
-        if canonical is None and key in {"total debt", "total borrowings", "borrowings"}:
+        if canonical is None and key in {"total debt", "total borrowings", "borrowings", "loans", "total loans", "debt"}:
             canonical = "Debt"
         if canonical is None and key in {"default", "defaulted"}:
             canonical = "default_status"
