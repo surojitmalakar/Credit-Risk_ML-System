@@ -941,9 +941,10 @@ st.sidebar.markdown("<div class='eyebrow'>CREDIT INTELLIGENCE</div>", unsafe_all
 st.sidebar.title("CREDIT RISK AI")
 selected_navigation = st.sidebar.radio("Workspace", list(NAVIGATION), label_visibility="collapsed")
 page = NAVIGATION[selected_navigation]
-# One authoritative page state, mirrored from the navigation radio so every
-# page switch is explicit and the active upload is never reset.
-st.session_state["current_page"] = page
+# Read-only mirror of the navigation radio. Never written back into a widget
+# key, so tab switches can never fight Streamlit's widget state and freeze.
+if st.session_state.get("current_page") != page:
+    st.session_state["current_page"] = page
 
 st.markdown(
     """
@@ -999,6 +1000,11 @@ if uploaded is not None:
             st.session_state.pop("financial_metrics", None)
             st.session_state.pop("risk_result", None)
             st.session_state.pop("warnings", None)
+            # Reset company/period selectors for the new file. They are popped
+            # BEFORE the widgets are instantiated below, so Streamlit never sees
+            # a stale widget value from the previous file (the classic freeze).
+            st.session_state.pop("company_filter", None)
+            st.session_state.pop("period_filter", None)
         analysis_revision = int(st.session_state.get("_upload_analysis_revision", 0))
         upload_pipeline_key = (upload_signature, uploaded.name, analysis_revision)
         has_current_analysis = st.session_state.get("_upload_pipeline_key") == upload_pipeline_key
@@ -1168,6 +1174,10 @@ if "company_id" in frame:
 else:
     company_values = pd.Series(["All records"] * len(frame), index=frame.index)
     company_options = ["All records"]
+# Guard against a stale company value carried over from a previous upload:
+# if it is no longer in this file's options, reset BEFORE the widget is built.
+if st.session_state.get("company_filter") not in company_options:
+    st.session_state.pop("company_filter", None)
 
 with selector_cols[0]:
     selected_company = st.selectbox("Company", company_options, key="company_filter")
@@ -1181,31 +1191,29 @@ if "company_id" in frame:
 else:
     company_rows = list(range(len(frame)))
 
-# When the company changes, reset the period widget to the first valid record
-# of the new company. A stale widget value (carried over from the previous
-# company's option list) can otherwise point at a row that no longer belongs
-# to it, so every downstream display would render the previous company's
-# record instead of the selected one. Resolve the row by its selected
-# position, then render the option list using that resolved row.
+# Resolve the period row from the selected company. The widget below is the
+# single owner of the "period_filter" value — never write to that key after
+# the widget exists, or Streamlit raises StreamlitAPIException and the tab
+# appears frozen. So compute the safe default here, pass it as index=, and
+# read the widget's return value instead of poking session_state.
 if company_rows:
-    current_period_value = st.session_state.get("period_filter")
-    if current_period_value not in company_rows:
-        st.session_state["period_filter"] = company_rows[0]
-        row_index = company_rows[0]
-    else:
-        row_index = current_period_value
+    _stored_period = st.session_state.get("period_filter")
+    _default_row = _stored_period if _stored_period in company_rows else company_rows[0]
+    _default_index = company_rows.index(_default_row)
 else:
-    row_index = 0
+    _default_index = 0
 
 with selector_cols[1]:
-    st.selectbox(
+    _period_position = st.selectbox(
         "Period",
         options=company_rows,
+        index=_default_index,
         format_func=lambda index: str(
             frame.iloc[index].get("period", f"Record {index + 1}")
         ),
         key="period_filter",
     )
+row_index = int(_period_position) if company_rows else 0
 
 def selected_assessment() -> dict:
     result = rule_based_assessment(frame, row_index, financial_analysis)
