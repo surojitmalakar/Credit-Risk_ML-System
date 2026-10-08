@@ -1130,11 +1130,11 @@ a { color:var(--g3) !important; }
 #   blurb  one sentence on what this tab is for
 #   chips  the concrete features the tab offers
 PAGE_FEATURES: dict[str, dict[str, object]] = {
-    "Executive Overview": {
-        "icon": "🌿", "accent": G3, "tag": "Command centre",
-        "title": "Every credit signal, one screen",
-        "blurb": "The landing view of the workspace: the selected company's health, risk drivers and trend in a single pass.",
-        "chips": ["Health score card", "Top risk drivers", "Revenue & liquidity trend", "Recommendations"],
+    "Home": {
+        "icon": "🌿", "accent": G3, "tag": "Start here",
+        "title": "Upload once, explore every tab",
+        "blurb": "The landing tab: upload a statement, pick a company-period, then jump to any specialised tab.",
+        "chips": ["Upload statement", "Company picker", "Period picker", "Tab guide"],
     },
     "Data Intelligence": {
         "icon": "🤖", "accent": G1, "tag": "Data detective",
@@ -1159,6 +1159,12 @@ PAGE_FEATURES: dict[str, dict[str, object]] = {
         "title": "Catch deterioration before the default",
         "blurb": "Transparent heuristics flag deteriorating conditions and name the value behind each trigger.",
         "chips": ["7 heuristic rules", "Evidence per signal", "Trigger vs not-assessed", "Historical measure"],
+    },
+    "AI Assistant": {
+        "icon": "💬", "accent": G4, "tag": "Chat + support",
+        "title": "Ask anything about this upload",
+        "blurb": "A SkillseED-style assistant: credit Q&A grounded in the selected record, plus product support.",
+        "chips": ["Credit copilot", "Dataset Q&A", "Suggested prompts", "Support answers"],
     },
     "Reports": {
         "icon": "📤", "accent": G3, "tag": "Exports",

@@ -101,16 +101,16 @@ def test_copilot_records_conversation_history_and_presets():
         "portfolio.csv", _financial_csv(), "text/csv"
     ).run(timeout=120)
     app.button[0].click().run(timeout=180)
-    app.radio[0].set_value("Overview").run(timeout=120)
+    app.radio[0].set_value("AI Assistant").run(timeout=120)
 
     assert not app.exception
-    chips = [button for button in app.button if button.key.startswith("copilot_chip")]
+    chips = [button for button in app.button if button.key.startswith("assistant_chip")]
     assert len(chips) >= 5
 
-    app.button(key="copilot_chip_0").click().run(timeout=180)
+    app.button(key="assistant_chip_0").click().run(timeout=180)
 
     assert not app.exception
-    app.text_area(key="copilot_question").set_value("What are the biggest risk factors?")
+    app.text_area(key="assistant_question").set_value("What are the biggest risk factors?")
     ask = next(button for button in app.button if button.label == "Ask AI")
     app.button(key=ask.key).click().run(timeout=180)
 

@@ -26,11 +26,12 @@ from msme_ews.theme import (
 )
 
 EXPECTED_TABS = {
-    "Executive Overview",
+    "Home",
     "MSME Financial Health",
     "Risk Prediction",
     "Early-Warning Indicators",
     "Data Intelligence",
+    "AI Assistant",
     "Reports",
     "Methodology",
     "About",

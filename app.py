@@ -405,6 +405,71 @@ def _financial_metrics_for_display(metrics: pd.DataFrame) -> pd.DataFrame:
     return displayed
 
 
+def _render_tab_guide() -> None:
+    """SkillseED-style section cards: each tab, its purpose, its features."""
+    st.markdown("<div class='panel-header'><h3>What would you like to discover?</h3></div>", unsafe_allow_html=True)
+    st.caption("Each section does one job — open a tab to explore it.")
+    guide = [
+        ("📊", "Financial Health", "Statement health from observed values.", ["Extracted fields", "Coverage", "Bounded ratios"]),
+        ("🎯", "Credit Risk", "One score with its evidence attached.", ["Health gauge", "Drivers", "Coverage"]),
+        ("⚠️", "Early Warnings", "Deterioration alerts with values.", ["7 rules", "Severity", "Thresholds"]),
+        ("🤖", "Data Intelligence", "The dataset describing itself.", ["Schema", "Anomalies", "Charts"]),
+        ("💬", "AI Assistant", "Chat + support, SkillseED style.", ["Credit Q&A", "Dataset Q&A", "Support"]),
+        ("📤", "Reports", "Take the analysis with you.", ["PDF briefs", "Excel", "Company reports"]),
+    ]
+    cols = st.columns(3)
+    for position, (icon, title, blurb, chips) in enumerate(guide):
+        with cols[position % 3]:
+            with st.container(border=True):
+                st.markdown(f"### {icon} {title}")
+                st.caption(blurb)
+                st.caption(" · ".join(chips))
+
+
+def _render_support_assistant(copilot_context: dict | None, intelligence: dict | None) -> None:
+    """SkillseED-style AI support: works with or without an upload.
+
+    Without data it answers product/support questions only and never invents
+    financial figures. With data the caller renders the grounded credit and
+    dataset Q&A around it.
+    """
+    st.markdown("<div class='panel-header'><h3>AI Support</h3></div>", unsafe_allow_html=True)
+    support_faq = {
+        "Which files can I upload?": "CSV, Excel workbooks (.xlsx / .xls), and text-based PDFs. Scanned-image PDFs need OCR and are not supported. Everything is processed locally in this session.",
+        "What happens after I upload?": "The file is validated, parsed, cleaned and field-mapped, then ratios, the rule-based risk index and early warnings are recalculated. Uploading a new file replaces all previous results.",
+        "Which tab does what?": "Home orients you. Financial Health shows observed statement fields. Credit Risk scores the selected record. Early Warnings lists triggered rules. Data Intelligence profiles the dataset. Reports exports PDFs and Excel. Methodology documents the rules.",
+        "Is my data sent anywhere?": "No. Parsing, analysis and report generation run locally in this Streamlit session. The optional LLM endpoint only receives compact derived context, never uploaded rows.",
+        "Who built this?": "Credit Risk AI — made by Surojit Malakar · SkillseED India. See the About tab for the full story.",
+    }
+    choice = st.selectbox("Common questions", [""] + list(support_faq), key="support_faq")
+    if choice:
+        st.info(support_faq[choice])
+    with st.form("support_form"):
+        question = st.text_input("Ask support", placeholder="e.g. Which files can I upload?", key="support_question")
+        submitted = st.form_submit_button("Ask support")
+    if submitted:
+        query = (question or "").strip().lower()
+        if not query:
+            st.info("Type a support question above, or pick a common question.")
+        else:
+            hit = next((answer for title, answer in support_faq.items() if any(word in query for word in title.lower().split()[:3])), None)
+            if hit is None:
+                if "upload" in query or "file" in query or "csv" in query or "excel" in query or "pdf" in query:
+                    hit = support_faq["Which files can I upload?"]
+                elif "tab" in query or "page" in query or "where" in query:
+                    hit = support_faq["Which tab does what?"]
+                elif "data" in query or "privacy" in query or "send" in query or "leav" in query:
+                    hit = support_faq["Is my data sent anywhere?"]
+                elif "who" in query or "built" in query or "contact" in query:
+                    hit = support_faq["Who built this?"]
+                elif "after" in query or "analys" in query or "result" in query:
+                    hit = support_faq["What happens after I upload?"]
+            st.info(hit or "I can help with uploads, tabs, privacy and background. For credit questions about a company, upload a statement first — the credit copilot above will answer from observed figures.")
+            st.caption("Answer source: built-in support answers (no model, no uploaded rows used).")
+    if copilot_context is None:
+        st.caption("Credit Q&A and dataset Q&A unlock after an upload — they answer only from observed figures.")
+
+
 def _render_data_intelligence(
     document_result,
     intelligence: dict,
@@ -915,11 +980,12 @@ def render_ai_risk_interpretation(
 
 
 NAVIGATION = {
-    "Overview": "Executive Overview",
+    "Home": "Home",
     "Financial Health": "MSME Financial Health",
     "Credit Risk": "Risk Prediction",
     "Early Warnings": "Early-Warning Indicators",
     "Data Intelligence": "Data Intelligence",
+    "AI Assistant": "AI Assistant",
     "Reports": "Reports",
     "Methodology": "Methodology",
     "About": "About",
@@ -939,6 +1005,7 @@ def get_bundle() -> dict:
 
 st.sidebar.markdown("<div class='eyebrow'>CREDIT INTELLIGENCE</div>", unsafe_allow_html=True)
 st.sidebar.title("CREDIT RISK AI")
+st.sidebar.caption("AI-Powered MSME Financial Intelligence")
 selected_navigation = st.sidebar.radio("Workspace", list(NAVIGATION), label_visibility="collapsed")
 page = NAVIGATION[selected_navigation]
 # Read-only mirror of the navigation radio. Never written back into a widget
@@ -958,14 +1025,18 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-selector_cols = st.columns([1.25, 1, 1.2])
-with selector_cols[2]:
-    uploaded = st.file_uploader(
-        "Upload financial statement",
-        type=["csv", "xlsx", "xls", "pdf"],
-        key="financial_csv_upload",
-        help="CSV, Excel workbooks, and text-based PDFs are processed locally. Scanned PDF images require OCR and are not supported.",
-    )
+# ── SkillseED-style workspace: upload + selectors live in the sidebar so the
+# main area belongs 100% to the ACTIVE tab. Nothing renders for another tab.
+st.sidebar.markdown("### 📤 Upload statement")
+uploaded = st.sidebar.file_uploader(
+    "Upload financial statement",
+    type=["csv", "xlsx", "xls", "pdf"],
+    key="financial_csv_upload",
+    help="CSV, Excel workbooks, and text-based PDFs are processed locally. Scanned PDF images require OCR and are not supported.",
+)
+st.sidebar.caption("CSV · XLSX · XLS · text PDF — processed locally, nothing leaves this session.")
+selector_company = None
+selector_period = None
 document_result = None
 data_intelligence = None
 data_visualizations = {}
@@ -1093,6 +1164,10 @@ if uploaded is not None:
             financial_base = cached_upload["financial_base"]
             st.session_state["uploaded_data"] = document_result.frame
             st.session_state["financial_metrics"] = data_intelligence.get("financial_metrics")
+        frame = financial_frame
+        # NOTE: per-tab rendering happens AFTER the selector block below. Only
+        # the Data Intelligence early-exit renders here so a non-financial
+        # upload still shows its profile instead of a dead page.
         if page == "Data Intelligence" or not financial_columns:
             _render_data_intelligence(
                 document_result,
@@ -1103,29 +1178,6 @@ if uploaded is not None:
                 financial_columns,
             )
             st.stop()
-        st.success(
-            f"File successfully loaded. AI Data Detective completed. "
-            f"{document_result.status} Source: {document_result.source_type}."
-        )
-        # Compact analysis context. The full automatic analysis (dataset
-        # profile, detected variables, patterns, and recommendations) lives on
-        # the Data Intelligence page; every other page shows only this summary
-        # strip so no page duplicates the dashboard layout.
-        context_cols = st.columns(4)
-        context_cols[0].metric("Analysis Mode", data_intelligence["analysis_mode"])
-        context_cols[1].metric("Dataset", data_intelligence["dataset_type"])
-        context_cols[2].metric("Records", f"{len(document_result.frame):,}")
-        context_cols[3].metric("Anomalies", f"{data_intelligence['anomaly_count']:,}")
-        st.caption(
-            f"AI Data Detective: {document_result.status} Source: {document_result.source_type}. "
-            f"{data_intelligence['executive_summary']} "
-            "Open Data Intelligence for the full dataset profile, detected variables, "
-            "correlations, and recommendations."
-        )
-        frame = financial_frame
-        for warning in document_result.warnings:
-            st.caption(warning)
-        st.caption("Document contents are processed locally; verify extracted figures against the source statement.")
     except Exception as error:
         # One friendly banner instead of a raw traceback that takes down every
         # tab. Streamlit's st.stop()/st.rerun control flow inherits
@@ -1137,10 +1189,29 @@ if uploaded is not None:
             render_methodology_page()
         st.stop()
 else:
-    if page == "About":
-        render_about_page()
-    elif page == "Methodology":
-        render_methodology_page()
+    if page in {"About", "Methodology", "Home", "AI Assistant"}:
+        if page == "About":
+            render_about_page()
+        elif page == "Methodology":
+            render_methodology_page()
+        elif page == "Home":
+            page_header("Home", "Upload a statement, pick a company-period, then open a specialised tab.", page="Home")
+            st.info("Upload a dataset to generate analysis.")
+            st.markdown(
+                "<div class='panel-header'><h3>DATA SOURCE · No dataset uploaded</h3></div>",
+                unsafe_allow_html=True,
+            )
+            st.warning("No financial dataset uploaded.")
+            st.caption(
+                "Use the sidebar uploader (CSV · XLSX · XLS · text PDF). "
+                "Home, About and Methodology stay available without data; every "
+                "analysis tab activates after a successful upload."
+            )
+            _render_tab_guide()
+        else:  # AI Assistant without data: support mode only
+            page_header("AI Assistant", "Chat and support — credit Q&A unlocks after an upload.", page="AI Assistant")
+            _render_support_assistant(None, None)
+        st.stop()
     else:
         st.info("Upload a dataset to generate analysis.")
         st.markdown(
@@ -1153,7 +1224,7 @@ else:
             "Every metric, risk score, chart, warning, and report on this page is "
             "computed from the uploaded file — nothing is shown until data arrives. "
             f"The '{selected_navigation}' page analyses the active upload. "
-            "About and Methodology are available without data."
+            "Home, About and Methodology are available without data."
         )
     st.stop()
 
@@ -1179,8 +1250,11 @@ else:
 if st.session_state.get("company_filter") not in company_options:
     st.session_state.pop("company_filter", None)
 
-with selector_cols[0]:
-    selected_company = st.selectbox("Company", company_options, key="company_filter")
+# Selectors live in the sidebar (SkillseED-style) so the main area belongs
+# 100% to the active tab. They are built once here; per-tab code below only
+# READS selected_company / row_index and never renders another tab's blocks.
+st.sidebar.markdown("### 🏢 Company & period")
+selected_company = st.sidebar.selectbox("Company", company_options, key="company_filter")
 
 if "company_id" in frame:
     company_rows = [
@@ -1203,17 +1277,19 @@ if company_rows:
 else:
     _default_index = 0
 
-with selector_cols[1]:
-    _period_position = st.selectbox(
-        "Period",
-        options=company_rows,
-        index=_default_index,
-        format_func=lambda index: str(
-            frame.iloc[index].get("period", f"Record {index + 1}")
-        ),
-        key="period_filter",
-    )
+_period_position = st.sidebar.selectbox(
+    "Period",
+    options=company_rows,
+    index=_default_index,
+    format_func=lambda index: str(
+        frame.iloc[index].get("period", f"Record {index + 1}")
+    ),
+    key="period_filter",
+)
 row_index = int(_period_position) if company_rows else 0
+with st.sidebar:
+    analyze_state = "Analysed" if st.session_state.get("_upload_pipeline_key") == upload_pipeline_key else "Ready"
+    st.caption(f"File: {uploaded.name} · {len(document_result.frame):,} records · {analyze_state}")
 
 def selected_assessment() -> dict:
     result = rule_based_assessment(frame, row_index, financial_analysis)
@@ -1277,9 +1353,39 @@ if (
         portfolio_cache[portfolio_cache_key] = analyze_credit_portfolio(document_result.frame)
     portfolio_analysis = portfolio_cache[portfolio_cache_key]
 
-if portfolio_analysis is not None and page == "Executive Overview":
+if page == "Home":
+    page_header("Home", "Upload once, explore every specialised tab.", page="Home")
+    st.success(
+        f"File successfully loaded. AI Data Detective completed. "
+        f"{document_result.status} Source: {document_result.source_type}."
+    )
+    context_cols = st.columns(4)
+    context_cols[0].metric("Analysis Mode", data_intelligence["analysis_mode"])
+    context_cols[1].metric("Dataset", data_intelligence["dataset_type"])
+    context_cols[2].metric("Records", f"{len(document_result.frame):,}")
+    context_cols[3].metric("Anomalies", f"{data_intelligence['anomaly_count']:,}")
+    st.caption(
+        f"AI Data Detective: {document_result.status} Source: {document_result.source_type}. "
+        f"{data_intelligence['executive_summary']} "
+        "Open Data Intelligence for the full dataset profile, detected variables, "
+        "correlations, and recommendations."
+    )
+    st.caption(
+        f"Company: {str(frame.iloc[row_index].get('company_id', 'Selected Company'))} | Period: "
+        f"{selected.iloc[0].get('period') if pd.notna(selected.iloc[0].get('period')) else 'Not identified'} | "
+        f"Coverage: {current_assessment['coverage_label']}. "
+        "Document contents are processed locally; verify extracted figures against the source statement."
+    )
+    for warning in document_result.warnings:
+        st.caption(warning)
+    st.caption(
+        f"DATA SOURCE · ✓ Uploaded dataset connected ({escape(str(uploaded.name))}, "
+        f"{len(document_result.frame):,} record(s)) · this hub orients you; "
+        "open a specialised tab for full analysis."
+    )
+if portfolio_analysis is not None and page == "Home":
     portfolio_summary = portfolio_analysis["summary"]
-    st.markdown("<div class='panel-header'><h3>Portfolio Risk Summary</h3></div>", unsafe_allow_html=True)
+    st.markdown("<div class='panel-header'><h3>Portfolio Snapshot</h3></div>", unsafe_allow_html=True)
     st.caption(
         f"DATA SOURCE · ✓ Uploaded dataset connected ({escape(str(uploaded.name))}) · "
         "all portfolio figures below are observed or calculated from that file."
@@ -1393,8 +1499,19 @@ def show_risk() -> dict:
     return result
 
 
-if page == "Executive Overview":
-    is_overview = page == "Executive Overview"
+if page == "Home":
+    result = current_assessment
+    st.session_state["risk_result"] = dict(result)
+    company_name = str(frame.iloc[row_index].get("company_id", "Selected Company"))
+    health_score = result.get("health_score")
+    current_ratio = selected_features.iloc[0].get("Current_Ratio", float("nan"))
+    risk_class = _state_color(result["risk_category"])
+    _render_tab_guide()
+    disclaimer()
+    st.markdown(site_footer_html(), unsafe_allow_html=True)
+    st.stop()
+
+if page == "HomeRetired":
     result = current_assessment
     st.session_state["risk_result"] = dict(result)
     company_name = str(frame.iloc[row_index].get("company_id", "Selected Company"))
@@ -1406,7 +1523,7 @@ if page == "Executive Overview":
         f"{len(document_result.frame):,} record(s)) · score, category, drivers and trends "
         "below are calculated from that file. Missing inputs show 'Not available'."
     )
-    if is_overview:
+    if True:  # legacy KPI strip — dead code, HomeRetired is never selected
         ratio_state = (
             "neutral"
             if pd.isna(current_ratio)
@@ -1543,7 +1660,7 @@ if page == "Executive Overview":
             ).astype({"Value": "string"})
             st.dataframe(ratios_frame, width="stretch", hide_index=True)
 
-    if is_overview:
+    if False:  # copilot moved to the AI Assistant tab
         st.markdown(
             "<div class='panel-header'><h3>AI Credit Copilot</h3></div>"
             "<div class='creator-credit'>Ask anything about this company's financial health.</div>",
@@ -1629,7 +1746,7 @@ if page == "Executive Overview":
                 st.session_state.pop("credit_copilot_source", None)
                 st.session_state.pop("credit_copilot_signature", None)
 
-    if is_overview:
+    if False:  # legacy overview blocks retired — Home is now a slim hub
         if model_available_for_record:
             render_ai_risk_interpretation(result, selected_features.iloc[0], active_warning_signals)
         else:
@@ -1650,7 +1767,7 @@ if page == "Executive Overview":
                 unsafe_allow_html=True,
             )
 
-    if is_overview:
+    if False:  # retired — recommendations live on Credit Risk tab
         st.markdown("<div class='panel-header'><h3>Recommendations</h3></div>", unsafe_allow_html=True)
         for recommendation in recommendations:
             st.write(f"- {recommendation}")
@@ -1704,7 +1821,7 @@ if page == "Executive Overview":
             if len(credit_report_cache) > 16:
                 credit_report_cache.pop(next(iter(credit_report_cache)), None)
 
-    if is_overview:
+    if False:  # retired — drivers live on Credit Risk tab
         st.markdown("<div class='panel-header'><h3>Top Risk Drivers</h3></div>", unsafe_allow_html=True)
         if model_available_for_record:
             st.markdown(
@@ -1726,7 +1843,7 @@ if page == "Executive Overview":
         else:
             st.info("No risk driver could be calculated from the available fields.")
 
-    if is_overview:
+    if False:  # retired — trends + warnings live on their own tabs
         st.markdown("<div class='panel-header'><h3>Financial trends</h3></div>", unsafe_allow_html=True)
         if "company_id" in frame and "period" in frame:
             series = trend_data(frame, selected.iloc[0]["company_id"])
@@ -1955,7 +2072,7 @@ elif page == "Risk Prediction":
         unsafe_allow_html=True,
     )
     st.caption(
-        "SHAP explainability is shown on the Overview when a model "
+        "SHAP explainability appears here when a model "
         "is served for the upload; otherwise the rule-based drivers above are shown."
     )
 
@@ -2018,6 +2135,123 @@ elif page == "Early-Warning Indicators":
             st.info("At least two dated company-period records are needed for a trend chart.")
     else:
         st.info("Add company_id and period columns to a longitudinal CSV to view historical trends.")
+    disclaimer()
+
+elif page == "AI Assistant":
+    result = current_assessment
+    st.session_state["risk_result"] = dict(result)
+    st.session_state["warnings"] = list(active_warning_signals)
+    company_name = str(frame.iloc[row_index].get("company_id", "Selected Company"))
+    page_header("AI Assistant", "Chat and support — credit Q&A grounded in the selected record.", page="AI Assistant")
+    st.caption(
+        f"DATA SOURCE · ✓ Uploaded dataset connected ({escape(str(uploaded.name))}) · "
+        f"company {escape(company_name)}, "
+        f"period {escape(str(selected.iloc[0].get('period', 'Not identified')))}. "
+        "Credit answers use only observed figures; support answers use built-in product knowledge."
+    )
+    st.markdown("<div class='panel-header'><h3>Credit Copilot</h3></div>", unsafe_allow_html=True)
+    st.caption("Ask anything about this company's financial health.")
+    if LLM_SETTINGS.enabled:
+        st.caption(
+            f"Answers are generated by {LLM_SETTINGS.label}. Only the derived "
+            "credit context for the selected record is sent to the endpoint."
+        )
+    else:
+        st.caption(
+            "Answers come from the built-in rule-based engine. Configure a free "
+            "LLM endpoint (LLM_API_BASE, e.g. a local Ollama server) to enable "
+            "AI-generated answers."
+        )
+    copilot_context = build_credit_context(frame, selected, selected_features, flags, row_index, result)
+    transcript = st.session_state.setdefault("copilot_history", [])
+    prompt_chips = suggested_questions(copilot_context)
+    chip_cols = st.columns(3)
+    preset = None
+    for position, prompt in enumerate(prompt_chips):
+        with chip_cols[position % 3]:
+            if st.button(prompt, key=f"assistant_chip_{position}", width="stretch"):
+                preset = prompt
+    if preset is not None:
+        st.session_state["assistant_question"] = preset
+    with st.form("assistant_credit_form"):
+        question = st.text_area(
+            "Question",
+            value=f"Why is this company currently {result['risk_category'].lower()}?",
+            key="assistant_question",
+            help="Answers use the selected company-period's financials, model output, and warning signals.",
+            height=76,
+            label_visibility="collapsed",
+            placeholder="Ask about this company's financial health...",
+        )
+        submitted = st.form_submit_button("Ask AI")
+    response_signature = (
+        str(selected_company),
+        row_index,
+        float(result["distress_probability"] or 0.0),
+        uploaded.name,
+        uploaded.size,
+        question,
+    )
+    if preset is not None:
+        response_signature = (*response_signature[:-1], preset)
+    if submitted or preset is not None or st.session_state.get("credit_copilot_signature") != response_signature:
+        history = [entry["question"] for entry in transcript]
+        with st.spinner("Generating answer..."):
+            response, source = generate_credit_copilot_answer(
+                question,
+                copilot_context,
+                history=history,
+                llm=LLM_SETTINGS,
+            )
+        transcript.append({"question": question, "answer": response, "company": str(selected_company), "source": source})
+        del transcript[:-12]
+        st.session_state["credit_copilot_response"] = response
+        st.session_state["credit_copilot_source"] = source
+        st.session_state["credit_copilot_signature"] = response_signature
+    if st.session_state.get("credit_copilot_response"):
+        answer_source = st.session_state.get("credit_copilot_source", "rule-based")
+        st.caption(
+            "Answer source: "
+            + (LLM_SETTINGS.label if answer_source == "llm" else "rule-based engine")
+        )
+        st.markdown(
+            f"<div class='copilot-output'>{escape(st.session_state['credit_copilot_response'])}</div>",
+            unsafe_allow_html=True,
+        )
+    if len(transcript) > 1:
+        with st.expander(f"Conversation history ({len(transcript)})"):
+            for entry in reversed(transcript):
+                st.markdown(f"**Q · {escape(str(entry['question']))}**")
+                st.caption(escape(str(entry["answer"])))
+        if st.button("Clear conversation", key="assistant_clear"):
+            transcript.clear()
+            st.session_state.pop("credit_copilot_response", None)
+            st.session_state.pop("credit_copilot_source", None)
+            st.session_state.pop("credit_copilot_signature", None)
+    st.markdown("<div class='panel-header'><h3>Dataset Q&A</h3></div>", unsafe_allow_html=True)
+    st.caption("Ask about the full upload: columns, quality, trends, anomalies.")
+    with st.form("assistant_dataset_form"):
+        dataset_question = st.text_input(
+            "Ask about this dataset",
+            key="assistant_dataset_question",
+            placeholder="For example: What are the main warnings?",
+        )
+        ask_dataset = st.form_submit_button("Ask about dataset")
+    if ask_dataset:
+        answer, answer_source = generate_dataset_copilot_answer(
+            dataset_question,
+            data_intelligence,
+            llm=LLM_SETTINGS,
+        )
+        st.session_state["assistant_dataset_answer"] = answer
+        st.session_state["assistant_dataset_source"] = answer_source
+    if st.session_state.get("assistant_dataset_answer"):
+        st.info(st.session_state["assistant_dataset_answer"])
+        st.caption(
+            "Answer source: "
+            + (LLM_SETTINGS.label if st.session_state.get("assistant_dataset_source") == "llm" else "rule-based engine")
+        )
+    _render_support_assistant(copilot_context, data_intelligence)
     disclaimer()
 
 elif page == "Reports":
